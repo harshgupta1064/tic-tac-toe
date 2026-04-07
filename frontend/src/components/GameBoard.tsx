@@ -30,18 +30,43 @@ function Cell({ value, index, isMyTurn, gameOver }: CellProps) {
 }
 
 export default function GameBoard() {
-  const { gameState, myUserId, timerRemaining, statusMessage } = useGame();
-  const { board, marks, currentTurn, mode } = gameState;
+  const { gameState, myUserId, displayName, timerRemaining, leaveMatch, findMatch } = useGame();
+  const { board, marks, playerNames, currentTurn, winner, reason, mode } = gameState;
 
   const myMark = marks[myUserId] || '';
   const isMyTurn = currentTurn === myUserId;
+  const isGameOver = Boolean(winner);
   const opponentId = Object.keys(marks).find(uid => uid !== myUserId) || '';
+  const myName = displayName || playerNames[myUserId] || 'You';
+  const opponentName = playerNames[opponentId] || 'Opponent';
+  const iWon = winner === myUserId;
+  const isDraw = winner === 'draw';
+  const resultText = isDraw
+    ? "It's a draw!"
+    : iWon
+      ? (reason === 'forfeit' ? 'You win! (Opponent left)' : reason === 'timeout' ? 'You win! (Opponent timed out)' : 'You win! 🎉')
+      : (reason === 'timeout' ? 'You lost! (Time ran out)' : 'You lose!');
+  const resultColor = isDraw ? 'text-yellow-400' : iWon ? 'text-green-400' : 'text-red-400';
 
   return (
     <div className="flex flex-col items-center justify-center min-h-screen px-6 py-8">
       <div className="w-full max-w-sm">
         {/* Header */}
-        <div className="text-center mb-6">
+        <div className="text-center mb-4">
+          {isGameOver ? (
+            <div className="text-5xl mb-4">{isDraw ? '🤝' : iWon ? '🏆' : '😔'}</div>
+          ) : (
+            <div className="grid grid-cols-2 gap-3 mb-4 text-left">
+              <div className={`rounded-xl border px-3 py-2 ${isMyTurn ? 'border-indigo-500 bg-indigo-900/30' : 'border-gray-700 bg-gray-900'}`}>
+                <p className="text-xs text-gray-400">You</p>
+                <p className="text-sm font-semibold text-white truncate">{myName}</p>
+              </div>
+              <div className={`rounded-xl border px-3 py-2 ${!isMyTurn ? 'border-indigo-500 bg-indigo-900/30' : 'border-gray-700 bg-gray-900'}`}>
+                <p className="text-xs text-gray-400">Opponent</p>
+                <p className="text-sm font-semibold text-white truncate">{opponentName}</p>
+              </div>
+            </div>
+          )}
           <div className="flex items-center justify-center gap-2 mb-1">
             <span className="text-sm text-gray-400">You are</span>
             <span className={`text-lg font-bold ${myMark === 'X' ? 'text-indigo-400' : 'text-rose-400'}`}>
@@ -51,16 +76,16 @@ export default function GameBoard() {
 
           {/* Turn indicator */}
           <div className={`inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-sm font-medium ${
-            isMyTurn
+            !isGameOver && isMyTurn
               ? 'bg-indigo-900/50 text-indigo-300 border border-indigo-700/50'
               : 'bg-gray-800 text-gray-400'
           }`}>
-            <span className={`w-2 h-2 rounded-full ${isMyTurn ? 'bg-indigo-400 animate-pulse' : 'bg-gray-600'}`} />
-            {isMyTurn ? 'Your turn' : "Opponent's turn"}
+            <span className={`w-2 h-2 rounded-full ${!isGameOver && isMyTurn ? 'bg-indigo-400 animate-pulse' : 'bg-gray-600'}`} />
+            {isGameOver ? 'Game finished' : isMyTurn ? 'Your turn' : "Opponent's turn"}
           </div>
 
           {/* Timer (timed mode) */}
-          {mode === 'timed' && isMyTurn && (
+          {mode === 'timed' && isMyTurn && !isGameOver && (
             <div className={`mt-3 text-2xl font-mono font-bold ${
               timerRemaining <= 10 ? 'text-red-400 animate-pulse' : 'text-orange-400'
             }`}>
@@ -77,15 +102,31 @@ export default function GameBoard() {
               value={cell}
               index={i}
               isMyTurn={isMyTurn}
-              gameOver={false}
+              gameOver={isGameOver}
             />
           ))}
         </div>
 
-        {/* Status */}
-        {statusMessage && (
-          <p className="text-amber-400 text-sm text-center">{statusMessage}</p>
+        {isGameOver && (
+          <div className="text-center">
+            <h3 className={`text-2xl font-bold ${resultColor}`}>{resultText}</h3>
+            <div className="space-y-3 mt-5">
+              <button
+                onClick={() => findMatch(mode)}
+                className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-3.5 rounded-xl transition-colors"
+              >
+                Play Again
+              </button>
+              <button
+                onClick={leaveMatch}
+                className="w-full bg-gray-800 hover:bg-gray-700 text-gray-300 font-medium py-3 rounded-xl transition-colors"
+              >
+                Back to Lobby
+              </button>
+            </div>
+          </div>
         )}
+
       </div>
     </div>
   );

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useGame, GameMode } from '../context/GameContext';
 
 export default function LobbyScreen() {
-  const { findMatch, fetchLeaderboard, leaderboard, session, setScreen } = useGame();
+  const { findMatch, fetchLeaderboard, leaderboard, session, displayName, setScreen } = useGame();
   const [mode, setMode] = useState<GameMode>('classic');
   const [showLeaderboard, setShowLeaderboard] = useState(false);
 
@@ -16,7 +16,7 @@ export default function LobbyScreen() {
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
           <h2 className="text-2xl font-bold text-white">Welcome back!</h2>
-          <p className="text-gray-400 text-sm mt-1">{session?.username}</p>
+          <p className="text-gray-400 text-sm mt-1">{displayName || session?.username}</p>
         </div>
 
         {/* Mode selector */}

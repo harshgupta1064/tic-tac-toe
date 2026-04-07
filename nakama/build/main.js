@@ -37,6 +37,7 @@ var matchInit = function (ctx, logger, nk, params) {
     var state = {
         board: ['', '', '', '', '', '', '', '', ''],
         marks: {},
+        playerNames: {},
         currentTurn: '',
         winner: null,
         gameOver: false,
@@ -45,6 +46,8 @@ var matchInit = function (ctx, logger, nk, params) {
         turnStartTick: 0,
         tickRate: tickRate,
         turnLimitTicks: 30, // 30 seconds
+        roomId: typeof params['roomId'] === 'string' ? params['roomId'] : '',
+        emptySinceTick: -1,
     };
     logger.info('Match initialized, mode: %s', mode);
     return { state: state, tickRate: tickRate, label: JSON.stringify({ mode: mode }) };
@@ -60,8 +63,24 @@ var matchJoin = function (ctx, logger, nk, dispatcher, tick, state, presences) {
     for (var _i = 0, presences_1 = presences; _i < presences_1.length; _i++) {
         var presence = presences_1[_i];
         state.presences[presence.userId] = presence;
+        var displayName = '';
+        try {
+            var profile = nk.storageRead([{
+                    collection: 'player_profile',
+                    key: 'display_name',
+                    userId: presence.userId,
+                }]);
+            if (profile && profile.length > 0) {
+                var raw = profile[0].value;
+                var parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+                displayName = ((parsed === null || parsed === void 0 ? void 0 : parsed.name) || '').trim();
+            }
+        }
+        catch (_a) { }
+        state.playerNames[presence.userId] = displayName || presence.username || 'Player';
         logger.info('Player joined: %s', presence.userId);
     }
+    state.emptySinceTick = -1;
     // Assign marks when both players are present
     if (Object.keys(state.presences).length === 2) {
         var userIds = Object.keys(state.presences);
@@ -72,6 +91,7 @@ var matchJoin = function (ctx, logger, nk, dispatcher, tick, state, presences) {
         var readyMsg = JSON.stringify({
             board: state.board,
             marks: state.marks,
+            playerNames: state.playerNames,
             currentTurn: state.currentTurn,
             mode: state.mode,
         });
@@ -102,11 +122,42 @@ var matchLeave = function (ctx, logger, nk, dispatcher, tick, state, presences) 
             writeLeaderboard(nk, logger, state, remainingUserId, presence.userId);
         }
     }
+    if (Object.keys(state.presences).length === 0 && state.roomId) {
+        try {
+            nk.storageDelete([{
+                    collection: ROOMS_COLLECTION,
+                    key: state.roomId,
+                    userId: ROOMS_USER_ID,
+                }]);
+        }
+        catch (_a) { }
+    }
     return { state: state };
 };
 var matchLoop = function (ctx, logger, nk, dispatcher, tick, state, messages) {
-    // If less than 2 players, wait
-    if (Object.keys(state.presences).length < 2)
+    // If no players are left, auto-delete waiting room and terminate after 60s.
+    var presenceCount = Object.keys(state.presences).length;
+    if (presenceCount === 0) {
+        if (state.emptySinceTick < 0)
+            state.emptySinceTick = tick;
+        if (tick - state.emptySinceTick >= 60) {
+            if (state.roomId) {
+                try {
+                    nk.storageDelete([{
+                            collection: ROOMS_COLLECTION,
+                            key: state.roomId,
+                            userId: ROOMS_USER_ID,
+                        }]);
+                }
+                catch (_a) { }
+            }
+            return null;
+        }
+        return { state: state };
+    }
+    state.emptySinceTick = -1;
+    // If less than 2 players, wait.
+    if (presenceCount < 2)
         return { state: state };
     if (state.gameOver)
         return null; // terminate match
@@ -169,6 +220,7 @@ var matchLoop = function (ctx, logger, nk, dispatcher, tick, state, messages) {
             state.turnStartTick = tick;
             dispatcher.broadcastMessage(OpCode.STATE, JSON.stringify({
                 board: state.board,
+                playerNames: state.playerNames,
                 currentTurn: state.currentTurn,
                 lastMove: { position: pos, mark: state.marks[senderId] },
             }));
@@ -220,6 +272,17 @@ var LEADERBOARD_ID = 'tictactoe_wins';
 var LEADERBOARD_WIN_STREAK = 'tictactoe_streak';
 var ROOMS_COLLECTION = 'rooms';
 var ROOMS_USER_ID = '00000000-0000-0000-0000-000000000000';
+var PLAYER_PROFILE_COLLECTION = 'player_profile';
+function generateRoomCode(nk) {
+    var alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    var code = '';
+    var raw = nk.uuidv4().replace(/-/g, '');
+    for (var i = 0; i < 6; i++) {
+        var idx = parseInt(raw.substring(i * 2, i * 2 + 2), 16) % alphabet.length;
+        code += alphabet[idx];
+    }
+    return code;
+}
 function ensureLeaderboard(nk, logger) {
     try {
         nk.leaderboardCreate(LEADERBOARD_ID, false, 'desc', 'incr', '', false);
@@ -339,9 +402,10 @@ var rpcCreateRoom = function (ctx, logger, nk, payload) {
     var name = (params.name || '').trim().substring(0, 32) || 'Room';
     var mode = params.mode === 'timed' ? 'timed' : 'classic';
     var roomId = nk.uuidv4();
+    var code = generateRoomCode(nk);
     var matchId;
     try {
-        matchId = nk.matchCreate(moduleName, { mode: mode });
+        matchId = nk.matchCreate(moduleName, { mode: mode, roomId: roomId });
     }
     catch (e) {
         logger.error('rpcCreateRoom: matchCreate failed: %s', e);
@@ -349,10 +413,11 @@ var rpcCreateRoom = function (ctx, logger, nk, payload) {
     }
     var record = {
         id: roomId,
+        code: code,
         name: name,
         mode: mode,
         hostUserId: ctx.userId || '',
-        hostUsername: ctx.username || '',
+        hostUsername: (params.hostUsername || '').trim().substring(0, 20) || ctx.username || 'Player',
         matchId: matchId,
         status: 'waiting',
         createdAt: Date.now(),
@@ -372,7 +437,7 @@ var rpcCreateRoom = function (ctx, logger, nk, payload) {
         return JSON.stringify({ error: 'Failed to save room' });
     }
     logger.info('Room created: %s (%s) by %s', roomId, name, ctx.userId);
-    return JSON.stringify({ roomId: roomId, matchId: matchId, name: name, mode: mode });
+    return JSON.stringify({ roomId: roomId, matchId: matchId, code: code, name: name, mode: mode });
 };
 // RPC: list_rooms
 // Payload: {} (no params needed)
@@ -449,6 +514,142 @@ var rpcMarkRoomFull = function (ctx, logger, nk, payload) {
         return JSON.stringify({ error: 'Failed to update room' });
     }
 };
+// RPC: delete_room
+// Payload: { "roomId": "..." }
+var rpcDeleteRoom = function (ctx, logger, nk, payload) {
+    var params = {};
+    try {
+        params = JSON.parse(payload || '{}');
+    }
+    catch (_a) { }
+    var roomId = params.roomId || '';
+    if (!roomId)
+        return JSON.stringify({ error: 'roomId required' });
+    try {
+        var existing = nk.storageRead([{
+                collection: ROOMS_COLLECTION,
+                key: roomId,
+                userId: ROOMS_USER_ID,
+            }]);
+        if (!existing || existing.length === 0)
+            return JSON.stringify({ ok: true });
+        var room = typeof existing[0].value === 'string'
+            ? JSON.parse(existing[0].value)
+            : existing[0].value;
+        if (room.hostUserId && room.hostUserId !== ctx.userId) {
+            return JSON.stringify({ error: 'Only host can delete room' });
+        }
+        nk.storageDelete([{
+                collection: ROOMS_COLLECTION,
+                key: roomId,
+                userId: ROOMS_USER_ID,
+            }]);
+        return JSON.stringify({ ok: true });
+    }
+    catch (e) {
+        logger.error('rpcDeleteRoom error: %s', e);
+        return JSON.stringify({ error: 'Failed to delete room' });
+    }
+};
+// RPC: get_room_by_code
+// Payload: { "code": "ABC123" }
+// Returns: { "room": RoomRecord | null, "error"?: string }
+var rpcGetRoomByCode = function (ctx, logger, nk, payload) {
+    var params = {};
+    try {
+        var parsed = JSON.parse(payload || '{}');
+        if (typeof parsed === 'string') {
+            try {
+                params = JSON.parse(parsed);
+            }
+            catch (_a) { }
+        }
+        else {
+            params = parsed;
+        }
+    }
+    catch (_b) { }
+    var code = (params.code || '').trim().toUpperCase();
+    if (!code)
+        return JSON.stringify({ error: 'code required' });
+    try {
+        var result = nk.storageList(ROOMS_USER_ID, ROOMS_COLLECTION, 100, '');
+        for (var _i = 0, _c = (result.objects || []); _i < _c.length; _i++) {
+            var obj = _c[_i];
+            try {
+                var room = typeof obj.value === 'string'
+                    ? JSON.parse(obj.value)
+                    : obj.value;
+                if (room.code === code &&
+                    room.status === 'waiting' &&
+                    Date.now() - room.createdAt < 30 * 60 * 1000) {
+                    return JSON.stringify({ room: room });
+                }
+            }
+            catch (_d) { }
+        }
+        return JSON.stringify({ error: 'Room code not found' });
+    }
+    catch (e) {
+        logger.error('rpcGetRoomByCode error: %s', e);
+        return JSON.stringify({ error: 'Failed to lookup room code' });
+    }
+};
+// RPC: set_display_name
+// Payload: { "name": "Visible Name" }
+var rpcSetDisplayName = function (ctx, logger, nk, payload) {
+    var params = {};
+    try {
+        params = JSON.parse(payload || '{}');
+    }
+    catch (_a) { }
+    var name = (params.name || '').trim().substring(0, 20);
+    if (!ctx.userId || !name)
+        return JSON.stringify({ error: 'invalid name' });
+    try {
+        nk.storageWrite([{
+                collection: PLAYER_PROFILE_COLLECTION,
+                key: 'display_name',
+                userId: ctx.userId,
+                value: { name: name },
+                permissionRead: 2,
+                permissionWrite: 1,
+            }]);
+        return JSON.stringify({ ok: true });
+    }
+    catch (e) {
+        logger.error('rpcSetDisplayName error: %s', e);
+        return JSON.stringify({ error: 'failed to save display name' });
+    }
+};
+// RPC: get_display_name
+// Payload: { "userId": "..." }
+var rpcGetDisplayName = function (ctx, logger, nk, payload) {
+    var params = {};
+    try {
+        params = JSON.parse(payload || '{}');
+    }
+    catch (_a) { }
+    var userId = (params.userId || '').trim();
+    if (!userId)
+        return JSON.stringify({ name: '' });
+    try {
+        var records = nk.storageRead([{
+                collection: PLAYER_PROFILE_COLLECTION,
+                key: 'display_name',
+                userId: userId,
+            }]);
+        if (!records || records.length === 0)
+            return JSON.stringify({ name: '' });
+        var raw = records[0].value;
+        var value = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        return JSON.stringify({ name: (value === null || value === void 0 ? void 0 : value.name) || '' });
+    }
+    catch (e) {
+        logger.error('rpcGetDisplayName error: %s', e);
+        return JSON.stringify({ name: '' });
+    }
+};
 // ─── Matchmaker Matched ───────────────────────────────────────────────────────
 // Called by Nakama when 2 players are matched via matchmaker
 var matchmakerMatched = function (ctx, logger, nk, matches) {
@@ -480,6 +681,10 @@ var InitModule = function (ctx, logger, nk, initializer) {
     initializer.registerRpc('create_room', rpcCreateRoom);
     initializer.registerRpc('list_rooms', rpcListRooms);
     initializer.registerRpc('mark_room_full', rpcMarkRoomFull);
+    initializer.registerRpc('delete_room', rpcDeleteRoom);
+    initializer.registerRpc('get_room_by_code', rpcGetRoomByCode);
+    initializer.registerRpc('set_display_name', rpcSetDisplayName);
+    initializer.registerRpc('get_display_name', rpcGetDisplayName);
     // Ensure leaderboard exists at startup
     try {
         nk.leaderboardCreate(LEADERBOARD_ID, false, 'desc', 'incr', '', false);

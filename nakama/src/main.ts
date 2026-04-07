@@ -18,6 +18,7 @@ const OpCode = {
 interface MatchState {
   board: string[];           // 9 cells: '' | 'X' | 'O'
   marks: { [userId: string]: 'X' | 'O' };
+  playerNames: { [userId: string]: string };
   currentTurn: string;       // userId whose turn it is
   winner: string | null;     // userId of winner, or 'draw'
   gameOver: boolean;
@@ -26,6 +27,8 @@ interface MatchState {
   turnStartTick: number;     // loop tick count when turn started
   tickRate: number;          // ticks per second
   turnLimitTicks: number;    // 30s * tickRate
+  roomId: string;
+  emptySinceTick: number;
 }
 
 interface MoveMessage {
@@ -59,6 +62,7 @@ const matchInit: nkruntime.MatchInitFunction<MatchState> = (
   const state: MatchState = {
     board: ['','','','','','','','',''],
     marks: {},
+    playerNames: {},
     currentTurn: '',
     winner: null,
     gameOver: false,
@@ -67,6 +71,8 @@ const matchInit: nkruntime.MatchInitFunction<MatchState> = (
     turnStartTick: 0,
     tickRate,
     turnLimitTicks: 30, // 30 seconds
+    roomId: typeof params['roomId'] === 'string' ? params['roomId'] : '',
+    emptySinceTick: -1,
   };
 
   logger.info('Match initialized, mode: %s', mode);
@@ -86,8 +92,23 @@ const matchJoin: nkruntime.MatchJoinFunction<MatchState> = (
 ) => {
   for (const presence of presences) {
     state.presences[presence.userId] = presence;
+    let displayName = '';
+    try {
+      const profile = nk.storageRead([{
+        collection: 'player_profile',
+        key: 'display_name',
+        userId: presence.userId,
+      } as any]);
+      if (profile && profile.length > 0) {
+        const raw = profile[0].value as any;
+        const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        displayName = (parsed?.name || '').trim();
+      }
+    } catch {}
+    state.playerNames[presence.userId] = displayName || presence.username || 'Player';
     logger.info('Player joined: %s', presence.userId);
   }
+  state.emptySinceTick = -1;
 
   // Assign marks when both players are present
   if (Object.keys(state.presences).length === 2) {
@@ -100,6 +121,7 @@ const matchJoin: nkruntime.MatchJoinFunction<MatchState> = (
     const readyMsg = JSON.stringify({
       board: state.board,
       marks: state.marks,
+      playerNames: state.playerNames,
       currentTurn: state.currentTurn,
       mode: state.mode,
     });
@@ -137,14 +159,43 @@ const matchLeave: nkruntime.MatchLeaveFunction<MatchState> = (
       writeLeaderboard(nk, logger, state, remainingUserId, presence.userId);
     }
   }
+  if (Object.keys(state.presences).length === 0 && state.roomId) {
+    try {
+      nk.storageDelete([{
+        collection: ROOMS_COLLECTION,
+        key: state.roomId,
+        userId: ROOMS_USER_ID,
+      } as any]);
+    } catch {}
+  }
   return { state };
 };
 
 const matchLoop: nkruntime.MatchLoopFunction<MatchState> = (
   ctx, logger, nk, dispatcher, tick, state, messages
 ) => {
-  // If less than 2 players, wait
-  if (Object.keys(state.presences).length < 2) return { state };
+  // If no players are left, auto-delete waiting room and terminate after 60s.
+  const presenceCount = Object.keys(state.presences).length;
+  if (presenceCount === 0) {
+    if (state.emptySinceTick < 0) state.emptySinceTick = tick;
+    if (tick - state.emptySinceTick >= 60) {
+      if (state.roomId) {
+        try {
+          nk.storageDelete([{
+            collection: ROOMS_COLLECTION,
+            key: state.roomId,
+            userId: ROOMS_USER_ID,
+          } as any]);
+        } catch {}
+      }
+      return null;
+    }
+    return { state };
+  }
+  state.emptySinceTick = -1;
+
+  // If less than 2 players, wait.
+  if (presenceCount < 2) return { state };
   if (state.gameOver) return null; // terminate match
 
   // ── Process incoming move messages ──────────────────────────────────────────
@@ -230,6 +281,7 @@ const matchLoop: nkruntime.MatchLoopFunction<MatchState> = (
 
       dispatcher.broadcastMessage(OpCode.STATE, JSON.stringify({
         board: state.board,
+        playerNames: state.playerNames,
         currentTurn: state.currentTurn,
         lastMove: { position: pos, mark: state.marks[senderId] },
       }));
@@ -292,9 +344,11 @@ const LEADERBOARD_ID = 'tictactoe_wins';
 const LEADERBOARD_WIN_STREAK = 'tictactoe_streak';
 const ROOMS_COLLECTION = 'rooms';
 const ROOMS_USER_ID = '00000000-0000-0000-0000-000000000000';
+const PLAYER_PROFILE_COLLECTION = 'player_profile';
 
 interface RoomRecord {
   id: string;
+  code: string;
   name: string;
   mode: string;
   hostUserId: string;
@@ -302,6 +356,17 @@ interface RoomRecord {
   matchId: string;
   status: 'waiting' | 'full';
   createdAt: number;
+}
+
+function generateRoomCode(nk: nkruntime.Nakama): string {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let code = '';
+  const raw = nk.uuidv4().replace(/-/g, '');
+  for (let i = 0; i < 6; i++) {
+    const idx = parseInt(raw.substring(i * 2, i * 2 + 2), 16) % alphabet.length;
+    code += alphabet[idx];
+  }
+  return code;
 }
 
 function ensureLeaderboard(nk: nkruntime.Nakama, logger: nkruntime.Logger) {
@@ -420,16 +485,17 @@ const rpcGetLeaderboard: nkruntime.RpcFunction = (ctx, logger, nk, payload) => {
 // Payload: { "name": "MyRoom", "mode": "classic" | "timed" }
 // Returns: { "roomId": "...", "matchId": "..." }
 const rpcCreateRoom: nkruntime.RpcFunction = (ctx, logger, nk, payload) => {
-  let params: { name?: string; mode?: string } = {};
+  let params: { name?: string; mode?: string; hostUsername?: string } = {};
   try { params = JSON.parse(payload || '{}'); } catch {}
 
   const name = (params.name || '').trim().substring(0, 32) || 'Room';
   const mode = params.mode === 'timed' ? 'timed' : 'classic';
   const roomId = nk.uuidv4();
+  const code = generateRoomCode(nk);
 
   let matchId: string;
   try {
-    matchId = nk.matchCreate(moduleName, { mode });
+    matchId = nk.matchCreate(moduleName, { mode, roomId });
   } catch (e) {
     logger.error('rpcCreateRoom: matchCreate failed: %s', e);
     return JSON.stringify({ error: 'Failed to create match' });
@@ -437,10 +503,11 @@ const rpcCreateRoom: nkruntime.RpcFunction = (ctx, logger, nk, payload) => {
 
   const record: RoomRecord = {
     id: roomId,
+    code,
     name,
     mode,
     hostUserId: ctx.userId || '',
-    hostUsername: ctx.username || '',
+    hostUsername: (params.hostUsername || '').trim().substring(0, 20) || ctx.username || 'Player',
     matchId,
     status: 'waiting',
     createdAt: Date.now(),
@@ -461,7 +528,7 @@ const rpcCreateRoom: nkruntime.RpcFunction = (ctx, logger, nk, payload) => {
   }
 
   logger.info('Room created: %s (%s) by %s', roomId, name, ctx.userId);
-  return JSON.stringify({ roomId, matchId, name, mode });
+  return JSON.stringify({ roomId, matchId, code, name, mode });
 };
 
 // RPC: list_rooms
@@ -541,6 +608,125 @@ const rpcMarkRoomFull: nkruntime.RpcFunction = (ctx, logger, nk, payload) => {
   }
 };
 
+// RPC: delete_room
+// Payload: { "roomId": "..." }
+const rpcDeleteRoom: nkruntime.RpcFunction = (ctx, logger, nk, payload) => {
+  let params: { roomId?: string } = {};
+  try { params = JSON.parse(payload || '{}'); } catch {}
+  const roomId = params.roomId || '';
+  if (!roomId) return JSON.stringify({ error: 'roomId required' });
+  try {
+    const existing = nk.storageRead([{
+      collection: ROOMS_COLLECTION,
+      key: roomId,
+      userId: ROOMS_USER_ID,
+    } as any]);
+    if (!existing || existing.length === 0) return JSON.stringify({ ok: true });
+    const room: RoomRecord = typeof (existing[0].value as any) === 'string'
+      ? JSON.parse(existing[0].value as any)
+      : (existing[0].value as any) as RoomRecord;
+    if (room.hostUserId && room.hostUserId !== ctx.userId) {
+      return JSON.stringify({ error: 'Only host can delete room' });
+    }
+    nk.storageDelete([{
+      collection: ROOMS_COLLECTION,
+      key: roomId,
+      userId: ROOMS_USER_ID,
+    } as any]);
+    return JSON.stringify({ ok: true });
+  } catch (e) {
+    logger.error('rpcDeleteRoom error: %s', e);
+    return JSON.stringify({ error: 'Failed to delete room' });
+  }
+};
+
+// RPC: get_room_by_code
+// Payload: { "code": "ABC123" }
+// Returns: { "room": RoomRecord | null, "error"?: string }
+const rpcGetRoomByCode: nkruntime.RpcFunction = (ctx, logger, nk, payload) => {
+  let params: { code?: string } = {};
+  try {
+    const parsed = JSON.parse(payload || '{}');
+    if (typeof parsed === 'string') {
+      try {
+        params = JSON.parse(parsed);
+      } catch {}
+    } else {
+      params = parsed;
+    }
+  } catch {}
+  const code = (params.code || '').trim().toUpperCase();
+  if (!code) return JSON.stringify({ error: 'code required' });
+
+  try {
+    const result = nk.storageList(ROOMS_USER_ID, ROOMS_COLLECTION, 100, '' as any);
+    for (const obj of (result.objects || [])) {
+      try {
+        const room: RoomRecord = typeof (obj.value as any) === 'string'
+          ? JSON.parse(obj.value as any)
+          : (obj.value as any) as RoomRecord;
+        if (
+          room.code === code &&
+          room.status === 'waiting' &&
+          Date.now() - room.createdAt < 30 * 60 * 1000
+        ) {
+          return JSON.stringify({ room });
+        }
+      } catch {}
+    }
+    return JSON.stringify({ error: 'Room code not found' });
+  } catch (e) {
+    logger.error('rpcGetRoomByCode error: %s', e);
+    return JSON.stringify({ error: 'Failed to lookup room code' });
+  }
+};
+
+// RPC: set_display_name
+// Payload: { "name": "Visible Name" }
+const rpcSetDisplayName: nkruntime.RpcFunction = (ctx, logger, nk, payload) => {
+  let params: { name?: string } = {};
+  try { params = JSON.parse(payload || '{}'); } catch {}
+  const name = (params.name || '').trim().substring(0, 20);
+  if (!ctx.userId || !name) return JSON.stringify({ error: 'invalid name' });
+  try {
+    nk.storageWrite([{
+      collection: PLAYER_PROFILE_COLLECTION,
+      key: 'display_name',
+      userId: ctx.userId,
+      value: { name },
+      permissionRead: 2,
+      permissionWrite: 1,
+    } as any]);
+    return JSON.stringify({ ok: true });
+  } catch (e) {
+    logger.error('rpcSetDisplayName error: %s', e);
+    return JSON.stringify({ error: 'failed to save display name' });
+  }
+};
+
+// RPC: get_display_name
+// Payload: { "userId": "..." }
+const rpcGetDisplayName: nkruntime.RpcFunction = (ctx, logger, nk, payload) => {
+  let params: { userId?: string } = {};
+  try { params = JSON.parse(payload || '{}'); } catch {}
+  const userId = (params.userId || '').trim();
+  if (!userId) return JSON.stringify({ name: '' });
+  try {
+    const records = nk.storageRead([{
+      collection: PLAYER_PROFILE_COLLECTION,
+      key: 'display_name',
+      userId,
+    } as any]);
+    if (!records || records.length === 0) return JSON.stringify({ name: '' });
+    const raw = records[0].value as any;
+    const value = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    return JSON.stringify({ name: value?.name || '' });
+  } catch (e) {
+    logger.error('rpcGetDisplayName error: %s', e);
+    return JSON.stringify({ name: '' });
+  }
+};
+
 // ─── Matchmaker Matched ───────────────────────────────────────────────────────
 // Called by Nakama when 2 players are matched via matchmaker
 const matchmakerMatched: nkruntime.MatchmakerMatchedFunction = (
@@ -580,6 +766,10 @@ const InitModule: nkruntime.InitModule = (
   initializer.registerRpc('create_room', rpcCreateRoom);
   initializer.registerRpc('list_rooms', rpcListRooms);
   initializer.registerRpc('mark_room_full', rpcMarkRoomFull);
+  initializer.registerRpc('delete_room', rpcDeleteRoom);
+  initializer.registerRpc('get_room_by_code', rpcGetRoomByCode);
+  initializer.registerRpc('set_display_name', rpcSetDisplayName);
+  initializer.registerRpc('get_display_name', rpcGetDisplayName);
 
   // Ensure leaderboard exists at startup
   try {

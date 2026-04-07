@@ -8,6 +8,7 @@ export type GameMode = 'classic' | 'timed';
 export interface GameState {
   board: string[];
   marks: { [userId: string]: 'X' | 'O' };
+  playerNames: { [userId: string]: string };
   currentTurn: string;
   winner: string | null;
   winnerMark: string | null;
@@ -26,6 +27,7 @@ export interface LeaderboardEntry {
 
 export interface Room {
   id: string;
+  code: string;
   name: string;
   mode: string;
   hostUsername: string;
@@ -41,7 +43,10 @@ interface GameContextType {
   match: Match | null;
   gameState: GameState;
   myUserId: string;
+  displayName: string;
   timerRemaining: number;
+  activeRoomCode: string;
+  activeRoomId: string;
   leaderboard: LeaderboardEntry[];
   rooms: Room[];
   statusMessage: string;
@@ -53,12 +58,15 @@ interface GameContextType {
   createRoom: (name: string, mode: GameMode) => Promise<void>;
   fetchRooms: () => Promise<void>;
   joinRoom: (room: Room) => Promise<void>;
+  joinRoomByCode: (code: string) => Promise<void>;
+  deleteActiveRoom: () => Promise<void>;
   setScreen: (s: Screen) => void;
 }
 
 const defaultGameState: GameState = {
   board: ['','','','','','','','',''],
   marks: {},
+  playerNames: {},
   currentTurn: '',
   winner: null,
   winnerMark: null,
@@ -98,7 +106,10 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
   const [match, setMatch] = useState<Match | null>(null);
   const [gameState, setGameState] = useState<GameState>(defaultGameState);
   const [myUserId, setMyUserId] = useState('');
+  const [displayName, setDisplayName] = useState('');
   const [timerRemaining, setTimerRemaining] = useState(30);
+  const [activeRoomCode, setActiveRoomCode] = useState('');
+  const [activeRoomId, setActiveRoomId] = useState('');
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [statusMessage, setStatusMessage] = useState('');
@@ -112,9 +123,18 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
       const deviceId = crypto.randomUUID();
       sessionStorage.setItem('deviceId', deviceId);
 
-      const sess = await client.authenticateDevice(deviceId, true, username);
+      const base = username.trim().toLowerCase().replace(/[^a-z0-9_]/g, '').slice(0, 14) || 'player';
+      const suffix = Math.random().toString(36).slice(2, 8);
+      const internalUsername = `${base}_${suffix}`;
+      const sess = await client.authenticateDevice(deviceId, true, internalUsername);
       setSession(sess);
       setMyUserId(sess.user_id!);
+      setDisplayName(username.trim());
+      setActiveRoomCode('');
+      setActiveRoomId('');
+      try {
+        await client.rpc(sess, 'set_display_name', JSON.stringify({ name: username.trim() }));
+      } catch {}
 
       const sock = await createSocket(sess);
       socketRef.current = sock;
@@ -129,13 +149,35 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
         } catch {}
 
         if (opCode === OpCode.READY || opCode === OpCode.STATE) {
-          setGameState(prev => ({
-            ...prev,
-            board: data.board || prev.board,
-            marks: data.marks || prev.marks,
-            currentTurn: data.currentTurn || prev.currentTurn,
-            mode: data.mode || prev.mode,
-          }));
+          let mergedMarks: { [userId: string]: 'X' | 'O' } = {};
+          setGameState(prev => {
+            const nextState = {
+              ...prev,
+              board: data.board || prev.board,
+              marks: data.marks || prev.marks,
+              playerNames: data.playerNames || prev.playerNames,
+              currentTurn: data.currentTurn || prev.currentTurn,
+              mode: data.mode || prev.mode,
+            };
+            mergedMarks = nextState.marks;
+            return nextState;
+          });
+          // Resolve opponent visible name from profile storage.
+          const ids = Object.keys(mergedMarks || {});
+          const otherId = ids.find(id => id !== (sess.user_id || ''));
+          if (otherId) {
+            client.rpc(sess, 'get_display_name', JSON.stringify({ userId: otherId }))
+              .then((res) => {
+                const body = parseRpcPayload(res.payload, { name: '' }) as { name?: string };
+                if (body.name) {
+                  setGameState((curr) => ({
+                    ...curr,
+                    playerNames: { ...curr.playerNames, [otherId]: body.name as string },
+                  }));
+                }
+              })
+              .catch(() => {});
+          }
           if (opCode === OpCode.READY) setScreen('game');
         }
 
@@ -182,6 +224,8 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     if (!socketRef.current || !session) return;
     setScreen('matchmaking');
     setStatusMessage('Looking for opponent...');
+    setActiveRoomCode('');
+    setActiveRoomId('');
     setGameState({ ...defaultGameState, mode });
     setTimerRemaining(30);
 
@@ -237,19 +281,23 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     if (!session) return;
     setScreen('matchmaking');
     setStatusMessage('Creating room...');
+    setActiveRoomCode('');
+    setActiveRoomId('');
     setGameState({ ...defaultGameState, mode });
     setTimerRemaining(30);
 
     try {
-      const result = await client.rpc(session, 'create_room', JSON.stringify({ name, mode }));
-      const body = parseRpcPayload(result.payload, {}) as { error?: string; matchId?: string };
+      const result = await client.rpc(session, 'create_room', JSON.stringify({ name, mode, hostUsername: displayName }));
+      const body = parseRpcPayload(result.payload, {}) as { error?: string; matchId?: string; code?: string; roomId?: string };
       if (body.error) throw new Error(body.error);
       if (!body.matchId) throw new Error('No matchId returned from create_room');
+      setActiveRoomCode(body.code || '');
+      setActiveRoomId(body.roomId || '');
 
       const sock = socketRef.current!;
       sock.onmatchmakermatched = null; // disable auto-matchmaker handler
 
-      setStatusMessage(`Room "${name}" created — waiting for opponent...`);
+      setStatusMessage(`Room "${name}" created (code: ${body.code || 'N/A'}) — waiting for opponent...`);
 
       // Join the match we just created
       const m = await sock.joinMatch(body.matchId);
@@ -258,9 +306,11 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
       // Poll until READY op-code fires (handled by existing onmatchdata)
     } catch (e: any) {
       setStatusMessage('Failed to create room: ' + (e.message || ''));
+      setActiveRoomCode('');
+      setActiveRoomId('');
       setScreen('lobby');
     }
-  }, [session]);
+  }, [displayName, session]);
 
   const fetchRooms = useCallback(async () => {
     if (!session) {
@@ -283,6 +333,8 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     if (!session || !socketRef.current) return;
     setScreen('matchmaking');
     setStatusMessage(`Joining "${room.name}"...`);
+    setActiveRoomCode('');
+    setActiveRoomId('');
     setGameState({ ...defaultGameState, mode: room.mode as GameMode });
     setTimerRemaining(30);
 
@@ -299,15 +351,72 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
       setStatusMessage('Joined! Starting game...');
     } catch (e: any) {
       setStatusMessage('Failed to join room: ' + (e.message || ''));
+      setActiveRoomCode('');
+      setActiveRoomId('');
       setScreen('lobby');
     }
   }, [session]);
 
+  const joinRoomByCode = useCallback(async (code: string) => {
+    if (!session || !socketRef.current) {
+      setStatusMessage('Please login again and retry.');
+      return;
+    }
+    const normalized = code.trim().toUpperCase();
+    if (!normalized) {
+      setStatusMessage('Please enter a room code.');
+      return;
+    }
+    setScreen('matchmaking');
+    setStatusMessage(`Joining room ${normalized}...`);
+    setActiveRoomCode('');
+    setActiveRoomId('');
+    try {
+      const result = await client.rpc(session, 'get_room_by_code', JSON.stringify({ code: normalized }));
+      const body = parseRpcPayload(result.payload, {}) as { room?: Room; error?: string };
+      if (body.error) throw new Error(body.error);
+      if (!body.room) throw new Error('Room not found');
+      const room = body.room;
+      const sock = socketRef.current;
+      sock.onmatchmakermatched = null;
+      setGameState({ ...defaultGameState, mode: room.mode as GameMode });
+      setTimerRemaining(30);
+      const m = await sock.joinMatch(room.matchId);
+      setMatch(m);
+      await client.rpc(session, 'mark_room_full', JSON.stringify({ roomId: room.id }));
+      setStatusMessage(`Joined room ${normalized}. Starting game...`);
+    } catch (e: any) {
+      setStatusMessage('Failed to join by code: ' + (e.message || 'Invalid room code'));
+      setScreen('rooms');
+    }
+  }, [session]);
+
+  const deleteActiveRoom = useCallback(async () => {
+    if (!session || !activeRoomId) {
+      setScreen('lobby');
+      return;
+    }
+    try {
+      await client.rpc(session, 'delete_room', JSON.stringify({ roomId: activeRoomId }));
+    } catch {}
+    try {
+      if (socketRef.current && match) {
+        await socketRef.current.leaveMatch(match.match_id);
+      }
+    } catch {}
+    setMatch(null);
+    setActiveRoomCode('');
+    setActiveRoomId('');
+    setStatusMessage('');
+    setGameState(defaultGameState);
+    setScreen('lobby');
+  }, [activeRoomId, match, session]);
+
   return (
     <GameContext.Provider value={{
-      screen, session, socket, match, gameState, myUserId,
-      timerRemaining, leaderboard, rooms, statusMessage,
-      login, findMatch, makeMove, leaveMatch, fetchLeaderboard, createRoom, fetchRooms, joinRoom, setScreen,
+      screen, session, socket, match, gameState, myUserId, displayName,
+      timerRemaining, activeRoomCode, activeRoomId, leaderboard, rooms, statusMessage,
+      login, findMatch, makeMove, leaveMatch, fetchLeaderboard, createRoom, fetchRooms, joinRoom, joinRoomByCode, deleteActiveRoom, setScreen,
     }}>
       {children}
     </GameContext.Provider>

@@ -1,29 +1,25 @@
-import { useEffect, useState } from 'react';
-import { useGame, GameMode, Room } from '../context/GameContext';
+import { useState } from 'react';
+import { useGame, GameMode } from '../context/GameContext';
 
 export default function RoomBrowserScreen() {
-  const { fetchRooms, rooms, joinRoom, createRoom, setScreen, statusMessage } = useGame();
-  const [tab, setTab] = useState<'browse' | 'create'>('browse');
+  const { createRoom, joinRoomByCode, setScreen, statusMessage } = useGame();
+  const [tab, setTab] = useState<'join' | 'create'>('join');
   const [loading, setLoading] = useState(false);
   const [roomName, setRoomName] = useState('');
+  const [roomCode, setRoomCode] = useState('');
   const [mode, setMode] = useState<GameMode>('classic');
-
-  useEffect(() => {
-    fetchRooms();
-    const interval = setInterval(fetchRooms, 5000); // refresh every 5s
-    return () => clearInterval(interval);
-  }, [fetchRooms]);
-
-  const handleJoin = async (room: Room) => {
-    setLoading(true);
-    await joinRoom(room);
-    setLoading(false);
-  };
 
   const handleCreate = async () => {
     if (!roomName.trim()) return;
     setLoading(true);
     await createRoom(roomName.trim(), mode);
+    setLoading(false);
+  };
+
+  const handleJoinByCode = async () => {
+    if (!roomCode.trim()) return;
+    setLoading(true);
+    await joinRoomByCode(roomCode.trim().toUpperCase());
     setLoading(false);
   };
 
@@ -34,10 +30,10 @@ export default function RoomBrowserScreen() {
           <h2 className="text-xl font-bold text-white">Game Rooms</h2>
           <div className="flex items-center gap-3">
             <button
-              onClick={() => fetchRooms()}
+              onClick={() => setRoomCode('')}
               className="text-indigo-400 hover:text-indigo-300 text-sm transition-colors"
             >
-              Refresh
+              Clear
             </button>
             <button
               onClick={() => setScreen('lobby')}
@@ -51,12 +47,12 @@ export default function RoomBrowserScreen() {
         {/* Tab bar */}
         <div className="bg-gray-900 rounded-xl p-1 flex mb-5">
           <button
-            onClick={() => setTab('browse')}
+            onClick={() => setTab('join')}
             className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors ${
-              tab === 'browse' ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:text-white'
+              tab === 'join' ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:text-white'
             }`}
           >
-            Browse ({rooms.length})
+            Join by Code
           </button>
           <button
             onClick={() => setTab('create')}
@@ -68,46 +64,30 @@ export default function RoomBrowserScreen() {
           </button>
         </div>
 
-        {tab === 'browse' && (
+        {tab === 'join' && (
           <div>
+            <div className="flex gap-2 mb-3">
+              <input
+                type="text"
+                value={roomCode}
+                onChange={(e) => setRoomCode(e.target.value.toUpperCase())}
+                onKeyDown={(e) => e.key === 'Enter' && handleJoinByCode()}
+                placeholder="Enter room code"
+                maxLength={6}
+                className="flex-1 bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-white placeholder-gray-500 focus:outline-none focus:border-indigo-500 text-sm uppercase"
+              />
+              <button
+                onClick={handleJoinByCode}
+                disabled={loading || !roomCode.trim()}
+                className="bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-700 disabled:text-gray-400 text-white text-sm font-medium px-3 rounded-lg transition-colors"
+              >
+                Join
+              </button>
+            </div>
             {statusMessage && (
-              <p className="text-center text-xs text-gray-400 mb-3">{statusMessage}</p>
-            )}
-            {rooms.length === 0 ? (
-              <div className="text-center py-12 text-gray-500 text-sm">
-                <div className="text-3xl mb-3">🏜️</div>
-                No open rooms right now.
-                <br />
-                <button
-                  onClick={() => setTab('create')}
-                  className="text-indigo-400 hover:text-indigo-300 mt-2 inline-block"
-                >
-                  Create one!
-                </button>
-              </div>
-            ) : (
-              <div className="space-y-2">
-                {rooms.map(room => (
-                  <div
-                    key={room.id}
-                    className="flex items-center justify-between bg-gray-800 rounded-xl px-4 py-3"
-                  >
-                    <div>
-                      <p className="text-white text-sm font-medium">{room.name}</p>
-                      <p className="text-gray-500 text-xs mt-0.5">
-                        {room.hostUsername} · {room.mode === 'timed' ? '⏱ Timed' : 'Classic'}
-                      </p>
-                    </div>
-                    <button
-                      onClick={() => handleJoin(room)}
-                      disabled={loading}
-                      className="bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-700 text-white text-sm font-medium px-4 py-1.5 rounded-lg transition-colors"
-                    >
-                      Join
-                    </button>
-                  </div>
-                ))}
-              </div>
+              <p className={`text-center text-xs ${statusMessage.toLowerCase().includes('failed') || statusMessage.toLowerCase().includes('not found') ? 'text-red-400' : 'text-gray-400'}`}>
+                {statusMessage}
+              </p>
             )}
           </div>
         )}
