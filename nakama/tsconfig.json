@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "target": "es5",
+    "lib": ["es6"],
+    "strict": true,
+    "noImplicitAny": true,
+    "outDir": "./build",
+    "types": ["nakama-common"],
+    "rootDir": "./src",
+    "moduleResolution": "node",
+    "module": "commonjs",
+    "esModuleInterop": true
+  },
+  "include": ["src/**/*"]
+}
