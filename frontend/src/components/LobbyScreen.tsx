@@ -51,6 +51,13 @@ export default function LobbyScreen() {
         </button>
 
         <button
+          onClick={() => setScreen('rooms' as any)}
+          className="w-full bg-gray-800 hover:bg-gray-700 text-gray-300 font-medium py-3 rounded-xl transition-colors text-sm mb-3"
+        >
+          🚪 Browse / Create Rooms
+        </button>
+
+        <button
           onClick={handleShowLeaderboard}
           className="w-full bg-gray-800 hover:bg-gray-700 text-gray-300 font-medium py-3 rounded-xl transition-colors text-sm"
         >
@@ -83,7 +90,13 @@ export default function LobbyScreen() {
                         <span className="text-gray-400 text-sm w-5">#{entry.rank}</span>
                         <span className="text-white text-sm font-medium">{entry.username || 'Player'}</span>
                       </div>
-                      <span className="text-indigo-400 text-sm font-semibold">{entry.wins} wins</span>
+                      <div className="flex items-center gap-3 text-sm">
+                        <span className="text-indigo-400 font-semibold">{entry.wins}W</span>
+                        <span className="text-red-400">{entry.losses}L</span>
+                        {entry.bestStreak > 1 && (
+                          <span className="text-orange-400">🔥{entry.bestStreak}</span>
+                        )}
+                      </div>
                     </div>
                   ))}
                 </div>

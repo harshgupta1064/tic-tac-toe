@@ -17,6 +17,8 @@ services:
 
   nakama:
     image: registry.heroiclabs.com/heroiclabs/nakama:3.21.1
+    env_file:
+      - ./nakama/.env
     entrypoint:
       - "/bin/sh"
       - "-ecx"

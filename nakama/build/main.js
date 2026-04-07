@@ -217,6 +217,9 @@ var matchSignal = function (ctx, logger, nk, dispatcher, tick, state, data) {
 };
 // ─── Leaderboard Helpers ──────────────────────────────────────────────────────
 var LEADERBOARD_ID = 'tictactoe_wins';
+var LEADERBOARD_WIN_STREAK = 'tictactoe_streak';
+var ROOMS_COLLECTION = 'rooms';
+var ROOMS_USER_ID = '00000000-0000-0000-0000-000000000000';
 function ensureLeaderboard(nk, logger) {
     try {
         nk.leaderboardCreate(LEADERBOARD_ID, false, 'desc', 'incr', '', false);
@@ -227,8 +230,62 @@ function ensureLeaderboard(nk, logger) {
 }
 function writeLeaderboard(nk, logger, state, winnerUserId, loserUserId) {
     try {
-        ensureLeaderboard(nk, logger);
+        // Create leaderboards if they don't exist (idempotent)
+        try {
+            nk.leaderboardCreate(LEADERBOARD_ID, false, 'desc', 'incr', '', false);
+        }
+        catch (_a) { }
+        try {
+            nk.leaderboardCreate('tictactoe_losses', false, 'desc', 'incr', '', false);
+        }
+        catch (_b) { }
+        try {
+            nk.leaderboardCreate(LEADERBOARD_WIN_STREAK, false, 'desc', 'best', '', false);
+        }
+        catch (_c) { }
+        // Record win +1 for winner
         nk.leaderboardRecordWrite(LEADERBOARD_ID, winnerUserId, '', 1, 0, {});
+        // Record loss +1 for loser
+        nk.leaderboardRecordWrite('tictactoe_losses', loserUserId, '', 1, 0, {});
+        // Win streak: fetch current streak for winner, increment and write best
+        // We store streak as metadata in storage, not a separate leaderboard
+        var storageKey = 'streak_' + winnerUserId;
+        var streak = 1;
+        try {
+            var existing = nk.storageRead([{
+                    collection: 'player_stats',
+                    key: storageKey,
+                    userId: winnerUserId,
+                }]);
+            if (existing && existing.length > 0) {
+                var data = existing[0].value;
+                streak = (data.streak || 0) + 1;
+            }
+        }
+        catch (_d) { }
+        nk.storageWrite([{
+                collection: 'player_stats',
+                key: storageKey,
+                userId: winnerUserId,
+                value: { streak: streak },
+                permissionRead: 2,
+                permissionWrite: 1,
+            }]);
+        // Reset loser streak
+        try {
+            var loserKey = 'streak_' + loserUserId;
+            nk.storageWrite([{
+                    collection: 'player_stats',
+                    key: loserKey,
+                    userId: loserUserId,
+                    value: { streak: 0 },
+                    permissionRead: 2,
+                    permissionWrite: 1,
+                }]);
+        }
+        catch (_e) { }
+        // Write best streak to leaderboard
+        nk.leaderboardRecordWrite(LEADERBOARD_WIN_STREAK, winnerUserId, '', streak, 0, {});
     }
     catch (e) {
         logger.error('Failed to write leaderboard: %s', e);
@@ -240,12 +297,27 @@ function writeLeaderboardDraw(nk, logger, state) {
 // ─── RPC: Get Leaderboard ─────────────────────────────────────────────────────
 var rpcGetLeaderboard = function (ctx, logger, nk, payload) {
     try {
-        var records = nk.leaderboardRecordsList(LEADERBOARD_ID, [], 10, '', '');
+        var wins = nk.leaderboardRecordsList(LEADERBOARD_ID, [], 10, '', '');
+        var losses = nk.leaderboardRecordsList('tictactoe_losses', [], 10, '', '');
+        var streaks = nk.leaderboardRecordsList(LEADERBOARD_WIN_STREAK, [], 10, '', '');
+        // Build lookup maps
+        var lossMap_1 = {};
+        for (var _i = 0, _a = (losses.records || []); _i < _a.length; _i++) {
+            var r = _a[_i];
+            lossMap_1[r.ownerId] = r.score;
+        }
+        var streakMap_1 = {};
+        for (var _b = 0, _c = (streaks.records || []); _b < _c.length; _b++) {
+            var r = _c[_b];
+            streakMap_1[r.ownerId] = r.score;
+        }
         return JSON.stringify({
-            records: (records.records || []).map(function (r) { return ({
+            records: (wins.records || []).map(function (r) { return ({
                 userId: r.ownerId,
                 username: r.username,
                 wins: r.score,
+                losses: lossMap_1[r.ownerId] || 0,
+                bestStreak: streakMap_1[r.ownerId] || 0,
                 rank: r.rank,
             }); })
         });
@@ -253,6 +325,128 @@ var rpcGetLeaderboard = function (ctx, logger, nk, payload) {
     catch (e) {
         logger.error('rpcGetLeaderboard error: %s', e);
         return JSON.stringify({ records: [] });
+    }
+};
+// RPC: create_room
+// Payload: { "name": "MyRoom", "mode": "classic" | "timed" }
+// Returns: { "roomId": "...", "matchId": "..." }
+var rpcCreateRoom = function (ctx, logger, nk, payload) {
+    var params = {};
+    try {
+        params = JSON.parse(payload || '{}');
+    }
+    catch (_a) { }
+    var name = (params.name || '').trim().substring(0, 32) || 'Room';
+    var mode = params.mode === 'timed' ? 'timed' : 'classic';
+    var roomId = nk.uuidv4();
+    var matchId;
+    try {
+        matchId = nk.matchCreate(moduleName, { mode: mode });
+    }
+    catch (e) {
+        logger.error('rpcCreateRoom: matchCreate failed: %s', e);
+        return JSON.stringify({ error: 'Failed to create match' });
+    }
+    var record = {
+        id: roomId,
+        name: name,
+        mode: mode,
+        hostUserId: ctx.userId || '',
+        hostUsername: ctx.username || '',
+        matchId: matchId,
+        status: 'waiting',
+        createdAt: Date.now(),
+    };
+    try {
+        nk.storageWrite([{
+                collection: ROOMS_COLLECTION,
+                key: roomId,
+                userId: ROOMS_USER_ID,
+                value: record,
+                permissionRead: 2, // public read
+                permissionWrite: 0, // no client writes
+            }]);
+    }
+    catch (e) {
+        logger.error('rpcCreateRoom: storageWrite failed: %s', e);
+        return JSON.stringify({ error: 'Failed to save room' });
+    }
+    logger.info('Room created: %s (%s) by %s', roomId, name, ctx.userId);
+    return JSON.stringify({ roomId: roomId, matchId: matchId, name: name, mode: mode });
+};
+// RPC: list_rooms
+// Payload: {} (no params needed)
+// Returns: { "rooms": [ RoomRecord, ... ] }
+var rpcListRooms = function (ctx, logger, nk, payload) {
+    try {
+        var result = nk.storageList(ROOMS_USER_ID, ROOMS_COLLECTION, 50, '');
+        var rooms = [];
+        for (var _i = 0, _a = (result.objects || []); _i < _a.length; _i++) {
+            var obj = _a[_i];
+            try {
+                var room = void 0;
+                if (typeof obj.value === 'string') {
+                    room = JSON.parse(obj.value);
+                }
+                else {
+                    room = obj.value;
+                }
+                // Only return waiting rooms created in last 30 minutes
+                if (room.status === 'waiting' && Date.now() - room.createdAt < 30 * 60 * 1000) {
+                    rooms.push(room);
+                }
+            }
+            catch (_b) { }
+        }
+        // Sort newest first
+        rooms.sort(function (a, b) { return b.createdAt - a.createdAt; });
+        return JSON.stringify({ rooms: rooms });
+    }
+    catch (e) {
+        logger.error('rpcListRooms error: %s', e);
+        return JSON.stringify({ rooms: [] });
+    }
+};
+// RPC: mark_room_full
+// Payload: { "roomId": "..." }
+var rpcMarkRoomFull = function (ctx, logger, nk, payload) {
+    var params = {};
+    try {
+        params = JSON.parse(payload || '{}');
+    }
+    catch (_a) { }
+    var roomId = params.roomId || '';
+    if (!roomId)
+        return JSON.stringify({ error: 'roomId required' });
+    try {
+        var existing = nk.storageRead([{
+                collection: ROOMS_COLLECTION,
+                key: roomId,
+                userId: ROOMS_USER_ID,
+            }]);
+        if (!existing || existing.length === 0)
+            return JSON.stringify({ error: 'Room not found' });
+        var room = void 0;
+        if (typeof existing[0].value === 'string') {
+            room = JSON.parse(existing[0].value);
+        }
+        else {
+            room = existing[0].value;
+        }
+        room.status = 'full';
+        nk.storageWrite([{
+                collection: ROOMS_COLLECTION,
+                key: roomId,
+                userId: ROOMS_USER_ID,
+                value: room,
+                permissionRead: 2,
+                permissionWrite: 0,
+            }]);
+        return JSON.stringify({ ok: true });
+    }
+    catch (e) {
+        logger.error('rpcMarkRoomFull error: %s', e);
+        return JSON.stringify({ error: 'Failed to update room' });
     }
 };
 // ─── Matchmaker Matched ───────────────────────────────────────────────────────
@@ -283,6 +477,9 @@ var InitModule = function (ctx, logger, nk, initializer) {
     });
     initializer.registerMatchmakerMatched(matchmakerMatched);
     initializer.registerRpc('get_leaderboard', rpcGetLeaderboard);
+    initializer.registerRpc('create_room', rpcCreateRoom);
+    initializer.registerRpc('list_rooms', rpcListRooms);
+    initializer.registerRpc('mark_room_full', rpcMarkRoomFull);
     // Ensure leaderboard exists at startup
     try {
         nk.leaderboardCreate(LEADERBOARD_ID, false, 'desc', 'incr', '', false);
