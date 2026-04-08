@@ -12,13 +12,7 @@ var OpCode = {
   REMATCH_START: 10,
   OPPONENT_LEFT_LOBBY: 11
 };
-var LEADERBOARD_WINS = "tictactoe_wins";
-var LEADERBOARD_LOSSES = "tictactoe_losses";
-var LEADERBOARD_STREAK = "tictactoe_best_streak";
-var LEADERBOARD_DRAWS = "tictactoe_draws";
-var COLLECTION_USERS = "users";
 var COLLECTION_ROOMS = "rooms";
-var USER_PROFILE_KEY = "profile";
 var MODULE_NAME = "tictactoe";
 var SYSTEM_USER_ID = "00000000-0000-0000-0000-000000000000";
 var WIN_LINES = [
@@ -31,147 +25,6 @@ var WIN_LINES = [
   [0, 4, 8],
   [2, 4, 6]
 ];
-
-// src/utils/userStore.ts
-function defaultProfile(userId, username) {
-  return {
-    userId,
-    username,
-    wins: 0,
-    losses: 0,
-    draws: 0,
-    currentStreak: 0,
-    bestStreak: 0,
-    rank: 0,
-    totalGames: 0,
-    updatedAt: Date.now()
-  };
-}
-function readProfile(nk, userId, username) {
-  try {
-    const reads = nk.storageRead([{
-      collection: COLLECTION_USERS,
-      key: USER_PROFILE_KEY,
-      userId
-    }]);
-    if (reads && reads.length > 0) {
-      const raw = reads[0].value;
-      const stored = typeof raw === "string" ? JSON.parse(raw) : raw;
-      stored.username = username || stored.username;
-      return stored;
-    }
-  } catch (e) {
-  }
-  return defaultProfile(userId, username);
-}
-function writeProfile(nk, profile) {
-  profile.updatedAt = Date.now();
-  profile.totalGames = profile.wins + profile.losses + profile.draws;
-  nk.storageWrite([{
-    collection: COLLECTION_USERS,
-    key: USER_PROFILE_KEY,
-    userId: profile.userId,
-    value: profile,
-    permissionRead: 2,
-    permissionWrite: 1
-  }]);
-}
-
-// src/utils/leaderboard.ts
-function ensureLeaderboards(nk) {
-  try {
-    nk.leaderboardCreate(LEADERBOARD_WINS, false, "desc", "incr", "", {});
-  } catch (e) {
-  }
-  try {
-    nk.leaderboardCreate(LEADERBOARD_LOSSES, false, "desc", "incr", "", {});
-  } catch (e) {
-  }
-  try {
-    nk.leaderboardCreate(LEADERBOARD_DRAWS, false, "desc", "incr", "", {});
-  } catch (e) {
-  }
-  try {
-    nk.leaderboardCreate(LEADERBOARD_STREAK, false, "desc", "best", "", {});
-  } catch (e) {
-  }
-}
-function writeMatchResult(nk, logger, state, winnerUserId, loserUserId, winnerUsername, loserUsername) {
-  try {
-    ensureLeaderboards(nk);
-    if (winnerUserId && loserUserId) {
-      const winner = readProfile(nk, winnerUserId, winnerUsername);
-      winner.wins += 1;
-      winner.currentStreak += 1;
-      if (winner.currentStreak > winner.bestStreak) winner.bestStreak = winner.currentStreak;
-      writeProfile(nk, winner);
-      nk.leaderboardRecordWrite(LEADERBOARD_WINS, winnerUserId, winnerUsername || "", 1, 0, {});
-      nk.leaderboardRecordWrite(LEADERBOARD_STREAK, winnerUserId, winnerUsername || "", winner.bestStreak, 0, {});
-      const loser = readProfile(nk, loserUserId, loserUsername);
-      loser.losses += 1;
-      loser.currentStreak = 0;
-      writeProfile(nk, loser);
-      nk.leaderboardRecordWrite(LEADERBOARD_LOSSES, loserUserId, loserUsername || "", 1, 0, {});
-      logger.info("Wrote win/loss: %s > %s", winnerUserId, loserUserId);
-    } else {
-      const userIds = Object.keys(state.marks);
-      for (let i = 0; i < userIds.length; i++) {
-        const uid = userIds[i];
-        const profile = readProfile(nk, uid, "");
-        profile.draws += 1;
-        writeProfile(nk, profile);
-        nk.leaderboardRecordWrite(LEADERBOARD_DRAWS, uid, profile.username || "", 1, 0, {});
-      }
-      logger.info("Wrote draw for %d players", userIds.length);
-    }
-  } catch (e) {
-    logger.error("writeMatchResult failed: %s", e);
-  }
-}
-function getLeaderboardRows(nk, logger) {
-  try {
-    ensureLeaderboards(nk);
-    const winsResult = nk.leaderboardRecordsList(LEADERBOARD_WINS, [], 20, null, null);
-    const records = winsResult.records || [];
-    if (!records.length) return [];
-    const userIds = records.map((r) => r.ownerId);
-    const reads = userIds.map((uid) => ({
-      collection: "users",
-      key: "profile",
-      userId: uid
-    }));
-    const profileMap = {};
-    try {
-      const profileResults = nk.storageRead(reads);
-      for (let i = 0; i < (profileResults || []).length; i++) {
-        const r = (profileResults || [])[i];
-        const raw = r.value;
-        profileMap[r.userId] = typeof raw === "string" ? JSON.parse(raw) : raw;
-      }
-    } catch (e) {
-    }
-    return records.map((r, i) => {
-      const p = profileMap[r.ownerId];
-      const wins = p && typeof p.wins === "number" ? p.wins : r.score;
-      const losses = p && typeof p.losses === "number" ? p.losses : 0;
-      const draws = p && typeof p.draws === "number" ? p.draws : 0;
-      const total = wins + losses + draws;
-      return {
-        userId: r.ownerId,
-        username: p && p.username || r.username || "Player",
-        wins,
-        losses,
-        draws,
-        bestStreak: p && p.bestStreak || 0,
-        winRate: total > 0 ? Math.round(wins / total * 100) : 0,
-        rank: i + 1
-      };
-    });
-  } catch (e) {
-    logger.error("getLeaderboardRows failed: %s", e);
-    return [];
-  }
-}
 
 // src/match/handler.ts
 function checkWinner(board) {
@@ -238,7 +91,6 @@ function matchJoin(ctx, logger, nk, dispatcher, tick, state, presences) {
   return { state };
 }
 function matchLeave(ctx, logger, nk, dispatcher, tick, state, presences) {
-  var _a;
   for (let i = 0; i < presences.length; i++) {
     const presence = presences[i];
     delete state.presences[presence.userId];
@@ -260,15 +112,6 @@ function matchLeave(ctx, logger, nk, dispatcher, tick, state, presences) {
             reason: "forfeit"
           }),
           remainingPresence ? [remainingPresence] : void 0
-        );
-        writeMatchResult(
-          nk,
-          logger,
-          state,
-          remainingUserId,
-          presence.userId,
-          ((_a = state.presences[remainingUserId]) == null ? void 0 : _a.username) || "",
-          presence.username || ""
         );
       }
       if (remainingPresence) {
@@ -330,7 +173,6 @@ function matchLoop(ctx, logger, nk, dispatcher, tick, state, messages) {
         if (result === "draw") {
           state.winner = "draw";
           dispatcher.broadcastMessage(OpCode.GAME_OVER, JSON.stringify({ board: state.board, winner: "draw", reason: "draw" }));
-          writeMatchResult(nk, logger, state, null, null, "", "");
         } else {
           const winnerUserId = Object.keys(state.marks).find((uid) => state.marks[uid] === result);
           const loserUserId = Object.keys(state.marks).find((uid) => state.marks[uid] !== result);
@@ -343,7 +185,6 @@ function matchLoop(ctx, logger, nk, dispatcher, tick, state, messages) {
           }));
           const winnerUsername = ((_a = state.presences[winnerUserId]) == null ? void 0 : _a.username) || "";
           const loserUsername = ((_b = state.presences[loserUserId]) == null ? void 0 : _b.username) || "";
-          writeMatchResult(nk, logger, state, winnerUserId, loserUserId, winnerUsername, loserUsername);
         }
       } else {
         const userIds = Object.keys(state.marks);
@@ -427,7 +268,6 @@ function matchLoop(ctx, logger, nk, dispatcher, tick, state, messages) {
       }));
       const winnerUsername = ((_c = state.presences[winnerUserId]) == null ? void 0 : _c.username) || "";
       const loserUsername = ((_d = state.presences[loserUserId]) == null ? void 0 : _d.username) || "";
-      writeMatchResult(nk, logger, state, winnerUserId, loserUserId, winnerUsername, loserUsername);
     }
   }
   return { state };
@@ -450,12 +290,6 @@ var matchmakerMatched = (ctx, logger, nk, matches) => {
     logger.error("matchmakerMatched error: %s", e);
     return void 0;
   }
-};
-
-// src/rpc/leaderboard.rpc.ts
-var rpcGetLeaderboard = (ctx, logger, nk, _payload) => {
-  const rows = getLeaderboardRows(nk, logger);
-  return JSON.stringify({ records: rows });
 };
 
 // src/rpc/rooms.rpc.ts
@@ -639,28 +473,11 @@ function InitModule(ctx, logger, nk, initializer) {
     matchSignal: matchSignal
   });
   initializer.registerMatchmakerMatched(matchmakerMatched);
-  initializer.registerRpc("get_leaderboard", rpcGetLeaderboard);
   initializer.registerRpc("create_room", rpcCreateRoom);
   initializer.registerRpc("list_rooms", rpcListRooms);
   initializer.registerRpc("mark_room_full", rpcMarkRoomFull);
   initializer.registerRpc("delete_room", rpcDeleteRoom);
   initializer.registerRpc("get_room_by_code", rpcGetRoomByCode);
-  try {
-    nk.leaderboardCreate(LEADERBOARD_WINS, false, "desc", "incr", "", {});
-  } catch (e) {
-  }
-  try {
-    nk.leaderboardCreate(LEADERBOARD_LOSSES, false, "desc", "incr", "", {});
-  } catch (e) {
-  }
-  try {
-    nk.leaderboardCreate(LEADERBOARD_STREAK, false, "desc", "best", "", {});
-  } catch (e) {
-  }
-  try {
-    nk.leaderboardCreate(LEADERBOARD_DRAWS, false, "desc", "incr", "", {});
-  } catch (e) {
-  }
   logger.info("TicTacToe module loaded \u2014 modular build");
 }
 !InitModule && InitModule.bind(null);

@@ -21,16 +21,7 @@ export interface GameState {
   mode: GameMode;
 }
 
-export interface LeaderboardEntry {
-  userId: string;
-  username: string;
-  wins: number;
-  losses: number;
-  draws: number;
-  bestStreak: number;
-  winRate: number;
-  rank: number;
-}
+
 
 export interface PlayerSessionStats {
   wins: number;
@@ -60,8 +51,6 @@ interface GameContextType {
   timerRemaining: number;
   activeRoomCode: string;
   activeRoomId: string;
-  leaderboard: LeaderboardEntry[];
-  myLeaderboardRecord: LeaderboardEntry | null;
   rooms: Room[];
   statusMessage: string;
   errorMessage: string;
@@ -71,7 +60,7 @@ interface GameContextType {
   findMatch: (mode: GameMode) => Promise<void>;
   makeMove: (position: number) => void;
   leaveMatch: () => void;
-  fetchLeaderboard: () => Promise<void>;
+
   fetchRooms: () => Promise<void>;
   createRoom: (name: string, mode: GameMode) => Promise<void>;
   joinRoom: (room: Room) => Promise<void>;
@@ -132,8 +121,6 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
   const [timerRemaining, setTimerRemaining]     = useState(10);
   const [activeRoomCode, setActiveRoomCode]     = useState('');
   const [activeRoomId, setActiveRoomId]         = useState('');
-  const [leaderboard, setLeaderboard]           = useState<LeaderboardEntry[]>([]);
-  const [myLeaderboardRecord, setMyLeaderboardRecord] = useState<LeaderboardEntry | null>(null);
   const [rooms, setRooms]                       = useState<Room[]>([]);
   const [statusMessage, setStatusMessage]       = useState('');
   const [errorMessage, setErrorMessage]         = useState('');
@@ -152,7 +139,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
   // ── Socket setup ───────────────────────────────────────────────────────────
   const setupSocket = useCallback(async (sess: Session) => {
     if (socketRef.current) {
-      try { socketRef.current.disconnect(); } catch (_) {}
+      try { await socketRef.current.disconnect(false); } catch (_) {}
     }
 
     const sock = await createSocket(sess);
@@ -323,9 +310,9 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
   const logout = useCallback(async () => {
     clearSession();
     if (socketRef.current) {
-      socketRef.current.ondisconnect = null;
-      socketRef.current.onmatchpresence = null;
-      socketRef.current.onmatchdata = null;
+      socketRef.current.ondisconnect = () => {};
+      socketRef.current.onmatchpresence = () => {};
+      socketRef.current.onmatchdata = () => {};
       try { await socketRef.current.disconnect(true); } catch (_) {}
     }
     socketRef.current  = null;
@@ -339,13 +326,10 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     setActiveRoomId('');
     setRematchState('idle');
     setRematchRequesterId('');
-    setLeaderboard([]);
-    setMyLeaderboardRecord(null);
     setSessionStats({});
     setScreen('auth');
   }, []);
 
-  // ── Matchmaking ────────────────────────────────────────────────────────────
   const findMatch = useCallback(async (mode: GameMode) => {
     const sock = socketRef.current;
     if (!sock) return;
@@ -353,9 +337,9 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     setStatusMessage('Looking for opponent...');
     setActiveRoomCode('');
     setActiveRoomId('');
+    setSessionStats({});
     setGameState({ ...defaultGameState, mode });
     setTimerRemaining(10);
-    setSessionStats({});
     try {
       sock.onmatchmakermatched = async (matched) => {
         try {
@@ -395,29 +379,14 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     setScreen('lobby');
   }, [match]);
 
-  // ── Leaderboard ────────────────────────────────────────────────────────────
-  const fetchLeaderboard = useCallback(async () => {
-    const sess = sessionRef.current;
-    if (!sess) return;
-    try {
-      const result = await client.rpc(sess, 'get_leaderboard', '');
-      const body = parseRpcPayload(result.payload, { records: [], myRecord: null }) as {
-        records?: LeaderboardEntry[];
-        myRecord?: LeaderboardEntry | null;
-      };
-      setLeaderboard(Array.isArray(body.records) ? body.records : []);
-      setMyLeaderboardRecord(body.myRecord ?? null);
-    } catch (e) {
-      console.error('[leaderboard] fetch failed:', e);
-    }
-  }, []);
+
 
   // ── Rooms ──────────────────────────────────────────────────────────────────
   const fetchRooms = useCallback(async () => {
     const sess = sessionRef.current;
     if (!sess) return;
     try {
-      const result = await client.rpc(sess, 'list_rooms', '');
+      const result = await client.rpc(sess, 'list_rooms', {});
       const body = parseRpcPayload(result.payload, { rooms: [] }) as { rooms?: Room[] };
       setRooms(Array.isArray(body.rooms) ? body.rooms : []);
     } catch (e) {
@@ -437,14 +406,14 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     setTimerRemaining(10);
     setSessionStats({});
     try {
-      const result = await client.rpc(sess, 'create_room', JSON.stringify({ name, mode, hostUsername: displayName }));
+      const result = await client.rpc(sess, 'create_room', { name, mode, hostUsername: displayName });
       const body = parseRpcPayload(result.payload, {}) as { error?: string; code?: string; roomId?: string; matchId?: string };
       if (body.error) throw new Error(body.error);
       setActiveRoomCode(body.code || '');
       setActiveRoomId(body.roomId || '');
-      sock.onmatchmakermatched = null;
+      sock.onmatchmakermatched = () => {};
       setStatusMessage(`Room "${name}" ready — waiting for opponent...`);
-      const m = await sock.joinMatch(body.matchId);
+      const m = await sock.joinMatch(body.matchId || '');
       setMatch(m);
     } catch (e: unknown) {
       setStatusMessage('Failed to create room: ' +
@@ -467,10 +436,10 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     setTimerRemaining(10);
     setSessionStats({});
     try {
-      sock.onmatchmakermatched = null;
+      sock.onmatchmakermatched = () => {};
       const m = await sock.joinMatch(room.matchId);
       setMatch(m);
-      await client.rpc(sess, 'mark_room_full', JSON.stringify({ roomId: room.id }));
+      await client.rpc(sess, 'mark_room_full', { roomId: room.id });
       setStatusMessage('Joined! Starting game...');
     } catch (e: unknown) {
       setStatusMessage('Failed to join room: ' +
@@ -496,18 +465,18 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     setActiveRoomCode('');
     setActiveRoomId('');
     try {
-      const result = await client.rpc(sess, 'get_room_by_code', JSON.stringify({ code: normalized }));
+      const result = await client.rpc(sess, 'get_room_by_code', { code: normalized });
       const body = parseRpcPayload(result.payload, {}) as { error?: string; room?: Room };
       if (body.error) throw new Error(body.error);
       if (!body.room) throw new Error('Room not found');
       const room = body.room as Room;
-      sock.onmatchmakermatched = null;
+      sock.onmatchmakermatched = () => {};
       setGameState({ ...defaultGameState, mode: room.mode as GameMode });
       setTimerRemaining(10);
       setSessionStats({});
       const m = await sock.joinMatch(room.matchId);
       setMatch(m);
-      await client.rpc(sess, 'mark_room_full', JSON.stringify({ roomId: room.id }));
+      await client.rpc(sess, 'mark_room_full', { roomId: room.id });
       setStatusMessage(`Joined room ${normalized}. Starting game...`);
     } catch (e: unknown) {
       setStatusMessage('Failed to join by code: ' + String((e as { message?: string })?.message ?? 'Invalid room code'));
@@ -522,7 +491,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
       return;
     }
     try {
-      await client.rpc(sess, 'delete_room', JSON.stringify({ roomId: activeRoomId }));
+      await client.rpc(sess, 'delete_room', { roomId: activeRoomId });
     } catch {}
     try {
       if (socketRef.current && match) {
@@ -570,11 +539,11 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
   return (
     <GameContext.Provider value={{
       screen, session, match, gameState, myUserId, displayName,
-      timerRemaining, activeRoomCode, activeRoomId, leaderboard, myLeaderboardRecord, rooms,
+      timerRemaining, activeRoomCode, activeRoomId, rooms,
       statusMessage, errorMessage,
       joinAsPlayer, restoreAuth, logout,
       findMatch, makeMove, leaveMatch,
-      fetchLeaderboard, fetchRooms, createRoom, joinRoom, joinRoomByCode, deleteActiveRoom,
+      fetchRooms, createRoom, joinRoom, joinRoomByCode, deleteActiveRoom,
       requestRematch, acceptRematch, declineRematch, rematchState, rematchRequesterId,
       sessionStats, setScreen,
     }}>

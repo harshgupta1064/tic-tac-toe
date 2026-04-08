@@ -6,7 +6,7 @@ The project uses a three-tier architecture:
 
 - **Tier 1 - React frontend (browser):** Handles UI rendering, user input, and local session persistence.
 - **Tier 2 - Nakama game server (TypeScript runtime):** Owns all gameplay validation, matchmaking decisions, room RPCs, and authoritative match state.
-- **Tier 3 - PostgreSQL database:** Stores persistent user accounts, leaderboard records, and storage objects managed through Nakama APIs.
+- **Tier 3 - PostgreSQL database:** Stores persistent user accounts and room data.
 
 ## Why server-authoritative?
 

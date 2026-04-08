@@ -1,7 +1,7 @@
 # Multiplayer Tic-Tac-Toe — Nakama
 
 Real-time multiplayer Tic-Tac-Toe with server-authoritative game logic,
-persistent leaderboards, matchmaking, room browser, and full auth system.
+session-based scoring, matchmaking, room browser, and full auth system.
 
 ## Documentation
 
@@ -15,7 +15,7 @@ persistent leaderboards, matchmaking, room browser, and full auth system.
 | [Server Module](docs/06-server-module-explanation.md) | main.ts annotated — match handlers, RPCs, logic |
 | [Frontend](docs/07-frontend-explanation.md) | React components, context, screen flow |
 | [Authentication](docs/08-auth-explanation.md) | Token lifecycle, guest mode, session restore |
-| [Leaderboard System](docs/09-leaderboard-explanation.md) | All 4 boards, streak design, personal rank |
+
 | [Room System](docs/10-rooms-explanation.md) | Room lifecycle, storage design, expiry |
 | [Deployment Guide](docs/11-deployment-guide.md) | Railway + Vercel, env vars, production checklist |
 | [Troubleshooting](docs/12-troubleshooting.md) | Diagnostic commands, problem/fix table |

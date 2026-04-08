@@ -11,7 +11,7 @@ This project is built for developers who want to learn practical multiplayer gam
 - Server-authoritative game architecture
 - Real-time WebSocket communication
 - Matchmaking systems
-- Persistent leaderboards
+- Session-based scoring and leaderboards
 - Room-based multiplayer
 
 ## Feature list (complete)
@@ -23,19 +23,17 @@ This project is built for developers who want to learn practical multiplayer gam
 - Two game modes: Classic (no timer) and Timed (30 seconds per turn)
 - Auto-forfeit on timeout in timed mode
 - Forfeit on disconnect (opponent leaving ends the game)
-- Win/loss/draw detection with full leaderboard tracking
-- Persistent leaderboard: wins, losses, draws, current streak, best streak, rank
-- Personal rank shown even if player is outside top 10
-- Frictionless device-based authentication (username only, tied to device ID)
-- Persistent stats across sessions via device linking
-- Auto session restore on page reload using JWT access and refresh tokens
+- Real-time session scoring (track wins, losses, draws across back-to-back games)
+- Session leaderboard summary at end of games
+- Frictionless device-based authentication (username only)
+- Device-based session isolation (perfect for local testing)
 - Mobile-first responsive UI with dark theme
 
 ## Tech stack table
 
 | Layer | Technology | Version | Purpose |
 |---|---|---|---|
-| Game backend | Nakama | 3.21.1 | Real-time authoritative match engine, matchmaking, RPCs, auth, leaderboards |
+| Game backend | Nakama | 3.21.1 | Real-time authoritative match engine, matchmaking, RPCs, auth |
 | Database | PostgreSQL | 14 | Persistent storage for Nakama accounts, leaderboard records, and storage objects |
 | Frontend framework | React + Vite + TypeScript | React 18 + Vite 5 + TS 5 | Browser UI, stateful screen flow, strongly typed client-side app |
 | Styling | Tailwind CSS | 3.x | Mobile-first utility styling and responsive layout |

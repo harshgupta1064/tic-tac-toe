@@ -13,11 +13,7 @@ export const OpCode = {
   OPPONENT_LEFT_LOBBY: 11,
 } as const;
 
-// ─── Leaderboard IDs ─────────────────────────────────────────────────────────
-export const LEADERBOARD_WINS   = "tictactoe_wins";
-export const LEADERBOARD_LOSSES = "tictactoe_losses";
-export const LEADERBOARD_STREAK = "tictactoe_best_streak";
-export const LEADERBOARD_DRAWS  = "tictactoe_draws";
+
 
 // ─── Storage collections ──────────────────────────────────────────────────────
 export const COLLECTION_USERS   = "users";
@@ -35,18 +31,7 @@ export const WIN_LINES = [
   [0,4,8],[2,4,6],
 ] as const;
 
-export interface UserProfile {
-  userId:        string;
-  username:      string;
-  wins:          number;
-  losses:        number;
-  draws:         number;
-  currentStreak: number;
-  bestStreak:    number;
-  rank:          number;
-  totalGames:    number;
-  updatedAt:     number;
-}
+
 
 export interface MatchState {
   board:               string[];
@@ -83,13 +68,4 @@ export interface MoveMessage {
   position: number;
 }
 
-export interface LeaderboardRow {
-  userId:     string;
-  username:   string;
-  wins:       number;
-  losses:     number;
-  draws:      number;
-  bestStreak: number;
-  winRate:    number;
-  rank:       number;
-}
+

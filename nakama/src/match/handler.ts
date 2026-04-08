@@ -3,7 +3,7 @@ import {
   MatchState, MoveMessage,
   COLLECTION_ROOMS, SYSTEM_USER_ID,
 } from "../models/types";
-import { writeMatchResult } from "../utils/leaderboard";
+
 
 function checkWinner(board: string[]): string | null {
   for (let i = 0; i < WIN_LINES.length; i++) {
@@ -104,12 +104,7 @@ function matchLeave(
           }),
           remainingPresence ? [remainingPresence] : undefined
         );
-        writeMatchResult(
-          nk, logger, state,
-          remainingUserId, presence.userId,
-          state.presences[remainingUserId]?.username || "",
-          presence.username || ""
-        );
+
       }
       if (remainingPresence) {
         dispatcher.broadcastMessage(
@@ -170,7 +165,6 @@ function matchLoop(
         if (result === "draw") {
           state.winner = "draw";
           dispatcher.broadcastMessage(OpCode.GAME_OVER, JSON.stringify({ board: state.board, winner: "draw", reason: "draw" }));
-          writeMatchResult(nk, logger, state, null, null, "", "");
         } else {
           const winnerUserId = Object.keys(state.marks).find((uid) => state.marks[uid] === result)!;
           const loserUserId = Object.keys(state.marks).find((uid) => state.marks[uid] !== result)!;
@@ -183,7 +177,6 @@ function matchLoop(
           }));
           const winnerUsername = state.presences[winnerUserId]?.username || "";
           const loserUsername = state.presences[loserUserId]?.username || "";
-          writeMatchResult(nk, logger, state, winnerUserId, loserUserId, winnerUsername, loserUsername);
         }
       } else {
         const userIds = Object.keys(state.marks);
@@ -273,7 +266,6 @@ function matchLoop(
       }));
       const winnerUsername = state.presences[winnerUserId]?.username || "";
       const loserUsername = state.presences[loserUserId]?.username || "";
-      writeMatchResult(nk, logger, state, winnerUserId, loserUserId, winnerUsername, loserUsername);
     }
   }
 

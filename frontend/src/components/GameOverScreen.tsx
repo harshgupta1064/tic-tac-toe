@@ -2,16 +2,10 @@ import { useEffect } from 'react';
 import { useGame } from '../context/GameContext';
 
 export default function GameOverScreen() {
-  const { fetchLeaderboard } = useGame();
   const {
     gameState, myUserId, leaveMatch, sessionStats,
     rematchState, requestRematch, acceptRematch, declineRematch,
   } = useGame();
-
-  useEffect(() => {
-    // Silently refresh global leaderboard in background after each game.
-    fetchLeaderboard();
-  }, [fetchLeaderboard]);
 
   const { winner, winnerMark, reason, board, marks, mode, playerNames } = gameState;
 
