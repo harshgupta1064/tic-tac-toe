@@ -16,6 +16,7 @@ const OpCode = {
   REMATCH_ACCEPT: 8,    // client → server: player accepts rematch
   REMATCH_DECLINE: 9,   // client ↔ server: rematch declined
   REMATCH_START: 10,    // server → client: rematch accepted, reset game
+  OPPONENT_LEFT_LOBBY: 11, // server → client: other player left; return to lobby
 } as const;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -148,25 +149,41 @@ const matchLeave: nkruntime.MatchLeaveFunction<MatchState> = (
   ctx, logger, nk, dispatcher, tick, state, presences
 ) => {
   for (const presence of presences) {
-    delete state.presences[presence.userId];
-    logger.info('Player left: %s', presence.userId);
+    const leaverId = presence.userId;
+    delete state.presences[leaverId];
+    logger.info('Player left: %s', leaverId);
 
-    // If game is still ongoing, the remaining player wins by forfeit
-    if (!state.gameOver && Object.keys(state.presences).length > 0) {
+    // Cancel any pending rematch when someone leaves
+    state.rematchRequestedBy = '';
+    state.rematchRequestTick = 0;
+
+    const remainingIds = Object.keys(state.presences);
+    if (remainingIds.length !== 1) continue;
+
+    const remainingUserId = remainingIds[0];
+    const remainingPresence = state.presences[remainingUserId];
+
+    if (!state.gameOver) {
+      // Mid-game forfeit — record result, tell remaining client to leave match & lobby
       state.gameOver = true;
-      const remainingUserId = Object.keys(state.presences)[0];
       state.winner = remainingUserId;
-
-      const gameOverMsg = JSON.stringify({
-        board: state.board,
-        winner: remainingUserId,
-        winnerMark: state.marks[remainingUserId],
-        reason: 'forfeit',
-      });
-      dispatcher.broadcastMessage(OpCode.GAME_OVER, gameOverMsg);
-
-      // Write leaderboard
-      writeLeaderboard(nk, logger, state, remainingUserId, presence.userId);
+      writeLeaderboard(nk, logger, state, remainingUserId, leaverId);
+      if (remainingPresence) {
+        dispatcher.broadcastMessage(
+          OpCode.OPPONENT_LEFT_LOBBY,
+          JSON.stringify({ reason: 'forfeit' }),
+          [remainingPresence]
+        );
+      }
+    } else {
+      // Post-game / rematch prompt — other player returns to lobby (no extra leaderboard)
+      if (remainingPresence) {
+        dispatcher.broadcastMessage(
+          OpCode.OPPONENT_LEFT_LOBBY,
+          JSON.stringify({ reason: 'opponent_left' }),
+          [remainingPresence]
+        );
+      }
     }
   }
   if (Object.keys(state.presences).length === 0 && state.roomId) {

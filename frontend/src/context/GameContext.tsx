@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useRef, useCallback } from 'react';
+import React, { createContext, useContext, useState, useRef, useCallback, useEffect } from 'react';
 import { Session, Socket, Match } from '@heroiclabs/nakama-js';
 import { client, createSocket } from '../lib/nakama';
 
@@ -90,6 +90,7 @@ const OpCode = {
   REMATCH_ACCEPT: 8,
   REMATCH_DECLINE: 9,
   REMATCH_START: 10,
+  OPPONENT_LEFT_LOBBY: 11,
 };
 
 const GameContext = createContext<GameContextType | null>(null);
@@ -132,6 +133,11 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
   const [rematchState, setRematchState] = useState<'idle' | 'requesting' | 'incoming' | 'declined' | 'declined_timeout'>('idle');
   const [rematchRequesterId, setRematchRequesterId] = useState('');
   const socketRef = useRef<Socket | null>(null);
+  const matchRef = useRef<Match | null>(null);
+
+  useEffect(() => {
+    matchRef.current = match;
+  }, [match]);
 
   const login = useCallback(async (username: string) => {
     setStatusMessage('Connecting...');
@@ -249,6 +255,25 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
           setScreen('game');
         }
 
+        if (opCode === OpCode.OPPONENT_LEFT_LOBBY) {
+          const m = matchRef.current;
+          if (socketRef.current && m?.match_id) {
+            socketRef.current.leaveMatch(m.match_id).catch(() => {});
+          }
+          setMatch(null);
+          setRematchState('idle');
+          setRematchRequesterId('');
+          setGameState(defaultGameState);
+          setScreen('lobby');
+          const r = data.reason;
+          setStatusMessage(
+            r === 'forfeit'
+              ? 'Opponent left. You win by forfeit.'
+              : 'Opponent returned to lobby.'
+          );
+          setTimeout(() => setStatusMessage(''), 4000);
+        }
+
         if (opCode === OpCode.REJECTED) {
           setStatusMessage(data.reason || 'Move rejected');
           setTimeout(() => setStatusMessage(''), 2000);
@@ -257,7 +282,19 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
 
       sock.onmatchpresence = (presenceEvent) => {
         if (presenceEvent.leaves && presenceEvent.leaves.length > 0) {
-          setStatusMessage('Opponent disconnected');
+          const m = matchRef.current;
+          if (m && socketRef.current) {
+            socketRef.current.leaveMatch(m.match_id).catch(() => {});
+            setMatch(null);
+            setRematchState('idle');
+            setRematchRequesterId('');
+            setGameState(defaultGameState);
+            setScreen('lobby');
+            setStatusMessage('Opponent left the match.');
+            setTimeout(() => setStatusMessage(''), 3000);
+          } else {
+            setStatusMessage('Opponent disconnected');
+          }
         }
       };
 
@@ -335,13 +372,15 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     socketRef.current.sendMatchState(match.match_id, OpCode.REMATCH_ACCEPT, data);
   }, [match]);
 
-  const declineRematch = useCallback(() => {
+  const declineRematch = useCallback(async () => {
     if (!socketRef.current || !match) return;
     setRematchState('idle');
     setRematchRequesterId('');
     const data = new TextEncoder().encode(JSON.stringify({}));
     socketRef.current.sendMatchState(match.match_id, OpCode.REMATCH_DECLINE, data);
-    // Go back to lobby immediately on decline
+    try {
+      await socketRef.current.leaveMatch(match.match_id);
+    } catch {}
     setMatch(null);
     setGameState(defaultGameState);
     setScreen('lobby');
