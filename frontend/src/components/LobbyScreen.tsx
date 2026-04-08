@@ -4,7 +4,7 @@ import { useGame, GameMode } from '../context/GameContext';
 export default function LobbyScreen() {
   const {
     findMatch, fetchLeaderboard, leaderboard, myLeaderboardRecord,
-    session, isGuest, logout, setScreen,
+    session, logout, setScreen,
   } = useGame();
 
   const [mode, setMode]               = useState<GameMode>('classic');
@@ -31,17 +31,8 @@ export default function LobbyScreen() {
         {/* Header */}
         <div className="flex items-center justify-between mb-8">
           <div>
-            <div className="flex items-center gap-2">
-              <h2 className="text-xl font-bold text-white">{session?.username}</h2>
-              {isGuest && (
-                <span className="text-xs bg-gray-700 text-gray-400 px-2 py-0.5 rounded-full">
-                  Guest
-                </span>
-              )}
-            </div>
-            <p className="text-gray-600 text-xs mt-0.5">
-              {isGuest ? 'Playing as guest — wins not saved' : 'Ranked player'}
-            </p>
+            <h2 className="text-xl font-bold text-white">{session?.username}</h2>
+            <p className="text-gray-600 text-xs mt-0.5">Ranked player</p>
           </div>
           <div />
         </div>
@@ -76,15 +67,13 @@ export default function LobbyScreen() {
           🚪 Browse / Create Rooms
         </button>
 
-        {!isGuest && (
-          <button
-            onClick={handleShowLeaderboard}
-            disabled={loadingLB}
-            className="w-full bg-gray-800 hover:bg-gray-700 disabled:opacity-50 text-gray-300 font-medium py-3 rounded-xl transition-colors text-sm"
-          >
-            {loadingLB ? 'Loading...' : '🏆 Leaderboard'}
-          </button>
-        )}
+        <button
+          onClick={handleShowLeaderboard}
+          disabled={loadingLB}
+          className="w-full bg-gray-800 hover:bg-gray-700 disabled:opacity-50 text-gray-300 font-medium py-3 rounded-xl transition-colors text-sm"
+        >
+          {loadingLB ? 'Loading...' : '🏆 Leaderboard'}
+        </button>
 
       </div>
 

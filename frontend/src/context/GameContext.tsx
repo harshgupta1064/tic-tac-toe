@@ -4,8 +4,7 @@ import React, {
 import { Session, Socket, Match } from '@heroiclabs/nakama-js';
 import {
   client, createSocket,
-  registerAccount, loginAccount, loginGuest, checkUsernameAvailability,
-  saveSession, clearSession, restoreSession,
+  loginWithUsername, saveSession, clearSession, restoreSession,
 } from '../lib/nakama';
 
 export type Screen = 'auth' | 'lobby' | 'rooms' | 'matchmaking' | 'game' | 'gameover';
@@ -50,7 +49,6 @@ interface GameContextType {
   gameState: GameState;
   myUserId: string;
   displayName: string;
-  isGuest: boolean;
   timerRemaining: number;
   activeRoomCode: string;
   activeRoomId: string;
@@ -59,10 +57,7 @@ interface GameContextType {
   rooms: Room[];
   statusMessage: string;
   errorMessage: string;
-  register: (username: string, password: string) => Promise<void>;
-  checkUsername: (username: string) => Promise<boolean>;
-  login: (username: string, password: string) => Promise<void>;
-  continueAsGuest: () => Promise<void>;
+  joinAsPlayer: (username: string) => Promise<void>;
   restoreAuth: () => Promise<void>;
   logout: () => Promise<void>;
   findMatch: (mode: GameMode) => Promise<void>;
@@ -118,41 +113,6 @@ function parseRpcPayload(payload: unknown, fallback: Record<string, unknown>) {
   return fallback;
 }
 
-function getAuthErrorMessage(kind: 'login' | 'register' | 'guest', e: unknown): string {
-  const err = e as { message?: string; code?: number; statusCode?: number };
-  const raw = String(err?.message ?? e ?? '');
-  const msg = raw.toLowerCase();
-  const code = err?.code ?? err?.statusCode;
-
-  if (
-    msg.includes('failed to fetch') ||
-    msg.includes('networkerror') ||
-    msg.includes('load failed') ||
-    msg.includes('network request failed')
-  ) {
-    return 'Cannot reach server. Please ensure backend is running and try again.';
-  }
-
-  if (kind === 'register') {
-    if (code === 409 || msg.includes('already') || msg.includes('exists') || msg.includes('taken')) {
-      return 'Username already exists. Try a different username.';
-    }
-    if (code === 400 || msg.includes('invalid')) {
-      return 'Invalid registration details. Please check username/password format.';
-    }
-    return 'Registration failed. Please try again.';
-  }
-
-  if (kind === 'login') {
-    if (code === 401 || code === 404 || msg.includes('credentials') || msg.includes('not found') || msg.includes('password')) {
-      return 'Username or password is wrong.';
-    }
-    return 'Login failed. Please try again.';
-  }
-
-  return 'Could not start guest session. Please try again.';
-}
-
 export function GameProvider({ children }: { children: React.ReactNode }) {
   const [screen, setScreen]                     = useState<Screen>('auth');
   const [session, setSession]                   = useState<Session | null>(null);
@@ -160,7 +120,6 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
   const [gameState, setGameState]               = useState<GameState>(defaultGameState);
   const [myUserId, setMyUserId]                 = useState('');
   const [displayName, setDisplayName]           = useState('');
-  const [isGuest, setIsGuest]                   = useState(false);
   const [timerRemaining, setTimerRemaining]     = useState(10);
   const [activeRoomCode, setActiveRoomCode]     = useState('');
   const [activeRoomId, setActiveRoomId]         = useState('');
@@ -175,8 +134,8 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
   const socketRef  = useRef<Socket | null>(null);
   const sessionRef = useRef<Session | null>(null);
 
-  // ── Socket setup ─────────────────────────────────────────────────────────
-  const setupSocket = useCallback(async (sess: Session, guest: boolean) => {
+  // ── Socket setup ───────────────────────────────────────────────────────────
+  const setupSocket = useCallback(async (sess: Session) => {
     if (socketRef.current) {
       try { socketRef.current.disconnect(); } catch (_) {}
     }
@@ -187,7 +146,6 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     setSession(sess);
     setMyUserId(sess.user_id!);
     setDisplayName(sess.username || '');
-    setIsGuest(guest);
 
     sock.onmatchdata = (matchData) => {
       const opCode = matchData.op_code;
@@ -292,64 +250,39 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     setStatusMessage('');
   }, []);
 
+  // ── Join as player (username only, no password) ────────────────────────────
+  const joinAsPlayer = useCallback(async (username: string) => {
+    setErrorMessage('');
+    try {
+      const sess = await loginWithUsername(username.trim());
+      saveSession(sess, username.trim());
+      setDisplayName(username.trim());
+      await setupSocket(sess);
+    } catch (e: unknown) {
+      const msg = String((e as { message?: string })?.message ?? e ?? '');
+      if (msg.toLowerCase().includes('failed to fetch') || msg.toLowerCase().includes('networkerror')) {
+        setErrorMessage('Cannot reach server. Please ensure the backend is running.');
+      } else {
+        setErrorMessage('Could not connect. Please try again.');
+      }
+    }
+  }, [setupSocket]);
+
+  // ── Restore session on page reload ─────────────────────────────────────────
   const restoreAuth = useCallback(async () => {
     const restored = await restoreSession();
     if (!restored) return;
     try {
-      await setupSocket(restored.session, false);
+      await setupSocket(restored.session);
     } catch {
       clearSession();
     }
   }, [setupSocket]);
 
-  // ── Register ─────────────────────────────────────────────────────────────
-  const register = useCallback(async (username: string, password: string) => {
-    setErrorMessage('');
-    try {
-      const sess = await registerAccount(username, password);
-      await client.rpc(sess, 'register_user', '');
-      saveSession(sess, username);
-      await setupSocket(sess, false);
-    } catch (e: unknown) {
-      setErrorMessage(getAuthErrorMessage('register', e));
-    }
-  }, [setupSocket]);
-
-  const checkUsername = useCallback(async (username: string) => {
-    return checkUsernameAvailability(username);
-  }, []);
-
-  // ── Login ────────────────────────────────────────────────────────────────
-  const login = useCallback(async (username: string, password: string) => {
-    setErrorMessage('');
-    try {
-      const sess = await loginAccount(username, password);
-      saveSession(sess, username);
-      setDisplayName(username);
-      await setupSocket(sess, false);
-    } catch (e: unknown) {
-      setErrorMessage(getAuthErrorMessage('login', e));
-    }
-  }, [setupSocket]);
-
-  // ── Guest ────────────────────────────────────────────────────────────────
-  const continueAsGuest = useCallback(async () => {
-    setErrorMessage('');
-    try {
-      const sess = await loginGuest();
-      await client.rpc(sess, 'mark_guest', '');
-      setDisplayName(sess.username || 'Guest');
-      await setupSocket(sess, true);
-    } catch (e: unknown) {
-      setErrorMessage(getAuthErrorMessage('guest', e));
-    }
-  }, [setupSocket]);
-
-  // ── Logout ───────────────────────────────────────────────────────────────
+  // ── Logout ─────────────────────────────────────────────────────────────────
   const logout = useCallback(async () => {
     clearSession();
     if (socketRef.current) {
-      // Avoid redirect race: ondisconnect currently sends users to lobby.
       socketRef.current.ondisconnect = null;
       socketRef.current.onmatchpresence = null;
       socketRef.current.onmatchdata = null;
@@ -360,7 +293,6 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     setSession(null);
     setMyUserId('');
     setDisplayName('');
-    setIsGuest(false);
     setMatch(null);
     setGameState(defaultGameState);
     setActiveRoomCode('');
@@ -372,7 +304,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     setScreen('auth');
   }, []);
 
-  // ── Matchmaking ──────────────────────────────────────────────────────────
+  // ── Matchmaking ────────────────────────────────────────────────────────────
   const findMatch = useCallback(async (mode: GameMode) => {
     const sock = socketRef.current;
     if (!sock) return;
@@ -385,7 +317,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     try {
       sock.onmatchmakermatched = async (matched) => {
         try {
-          const m = await sock.joinMatch(matched.match_id || '', matched.token);
+          const m = await sock.joinMatch(matched.match_id || undefined, matched.token || undefined);
           setMatch(m);
           setStatusMessage('Opponent found! Starting...');
         } catch (e: unknown) {
@@ -402,14 +334,14 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  // ── Move ─────────────────────────────────────────────────────────────────
+  // ── Move ───────────────────────────────────────────────────────────────────
   const makeMove = useCallback((position: number) => {
     if (!socketRef.current || !match) return;
     const data = new TextEncoder().encode(JSON.stringify({ position }));
     socketRef.current.sendMatchState(match.match_id, OpCode.MOVE, data);
   }, [match]);
 
-  // ── Leave match ──────────────────────────────────────────────────────────
+  // ── Leave match ────────────────────────────────────────────────────────────
   const leaveMatch = useCallback(async () => {
     if (!socketRef.current || !match) return;
     try { await socketRef.current.leaveMatch(match.match_id); } catch (_) {}
@@ -420,7 +352,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     setScreen('lobby');
   }, [match]);
 
-  // ── Leaderboard ──────────────────────────────────────────────────────────
+  // ── Leaderboard ────────────────────────────────────────────────────────────
   const fetchLeaderboard = useCallback(async () => {
     const sess = sessionRef.current;
     if (!sess) return;
@@ -430,7 +362,6 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
         records?: LeaderboardEntry[];
         myRecord?: LeaderboardEntry | null;
       };
-      console.log('[leaderboard] records:', body.records, 'myRecord:', body.myRecord);
       setLeaderboard(Array.isArray(body.records) ? body.records : []);
       setMyLeaderboardRecord(body.myRecord ?? null);
     } catch (e) {
@@ -438,7 +369,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  // ── Rooms ────────────────────────────────────────────────────────────────
+  // ── Rooms ──────────────────────────────────────────────────────────────────
   const fetchRooms = useCallback(async () => {
     const sess = sessionRef.current;
     if (!sess) return;
@@ -507,7 +438,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     const sess = sessionRef.current;
     const sock = socketRef.current;
     if (!sess || !sock) {
-      setStatusMessage('Please login again and retry.');
+      setStatusMessage('Please re-enter your name and retry.');
       return;
     }
     const normalized = code.trim().toUpperCase();
@@ -590,10 +521,10 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <GameContext.Provider value={{
-      screen, session, match, gameState, myUserId, displayName, isGuest,
+      screen, session, match, gameState, myUserId, displayName,
       timerRemaining, activeRoomCode, activeRoomId, leaderboard, myLeaderboardRecord, rooms,
       statusMessage, errorMessage,
-      register, checkUsername, login, continueAsGuest, restoreAuth, logout,
+      joinAsPlayer, restoreAuth, logout,
       findMatch, makeMove, leaveMatch,
       fetchLeaderboard, fetchRooms, createRoom, joinRoom, joinRoomByCode, deleteActiveRoom,
       requestRematch, acceptRematch, declineRematch, rematchState, rematchRequesterId,

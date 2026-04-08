@@ -11,47 +11,53 @@ const LS_TOKEN         = "nk_token";
 const LS_REFRESH_TOKEN = "nk_refresh_token";
 const LS_USERNAME      = "nk_username";
 const LS_USER_ID       = "nk_user_id";
-const LS_DEVICE_ID     = "nk_device_id";
-const SS_GUEST_DEVICE_ID = "nk_guest_device_id";
+
+/** Persistent device ID — same device keeps the same account across page reloads. */
+function getDeviceId(username: string): string {
+  const key = `nk_device_id_${username.toLowerCase().trim()}`;
+  let id = localStorage.getItem(key);
+  if (!id) {
+    id = crypto.randomUUID();
+    localStorage.setItem(key, id);
+  }
+  return id;
+}
 
 export function saveSession(session: Session, username: string): void {
-  localStorage.setItem(LS_TOKEN, session.token);
-  localStorage.setItem(LS_REFRESH_TOKEN, session.refresh_token || "");
-  localStorage.setItem(LS_USERNAME, username);
-  localStorage.setItem(LS_USER_ID, session.user_id || "");
+  sessionStorage.setItem(LS_TOKEN, session.token);
+  sessionStorage.setItem(LS_REFRESH_TOKEN, session.refresh_token || "");
+  sessionStorage.setItem(LS_USERNAME, username);
+  sessionStorage.setItem(LS_USER_ID, session.user_id || "");
 }
 
 export function clearSession(): void {
-  [LS_TOKEN, LS_REFRESH_TOKEN, LS_USERNAME, LS_USER_ID].forEach((k) => localStorage.removeItem(k));
+  [LS_TOKEN, LS_REFRESH_TOKEN, LS_USERNAME, LS_USER_ID].forEach((k) =>
+    sessionStorage.removeItem(k)
+  );
 }
 
-export function getDeviceId(): string {
-  let id = localStorage.getItem(LS_DEVICE_ID);
-  if (!id) {
-    id = crypto.randomUUID();
-    localStorage.setItem(LS_DEVICE_ID, id);
-  }
-  return id;
+/**
+ * Authenticate via device ID with a chosen display name.
+ * Same device always maps to the same Nakama account — stats persist.
+ */
+export async function loginWithUsername(username: string): Promise<Session> {
+  const deviceId = getDeviceId(username);
+  return client.authenticateDevice(deviceId, true, username);
 }
 
-function getGuestDeviceIdForTab(): string {
-  let id = sessionStorage.getItem(SS_GUEST_DEVICE_ID);
-  if (!id) {
-    id = crypto.randomUUID();
-    sessionStorage.setItem(SS_GUEST_DEVICE_ID, id);
-  }
-  return id;
-}
-
+/**
+ * Restore a valid session from localStorage.
+ * Returns null if nothing usable is stored.
+ */
 export async function restoreSession(): Promise<{
   session: Session;
   username: string;
   userId: string;
 } | null> {
-  const token = localStorage.getItem(LS_TOKEN);
-  const refreshToken = localStorage.getItem(LS_REFRESH_TOKEN);
-  const username = localStorage.getItem(LS_USERNAME) || "";
-  const userId = localStorage.getItem(LS_USER_ID) || "";
+  const token        = sessionStorage.getItem(LS_TOKEN);
+  const refreshToken = sessionStorage.getItem(LS_REFRESH_TOKEN);
+  const username     = sessionStorage.getItem(LS_USERNAME) || "";
+  const userId       = sessionStorage.getItem(LS_USER_ID)  || "";
   if (!token || !refreshToken) return null;
   try {
     let session = Session.restore(token, refreshToken);
@@ -66,54 +72,8 @@ export async function restoreSession(): Promise<{
   }
 }
 
-export async function registerAccount(username: string, password: string): Promise<Session> {
-  const email = username.toLowerCase() + "@tictactoe.local";
-  return client.authenticateEmail(email, password, true, username);
-}
-
-export async function loginAccount(username: string, password: string): Promise<Session> {
-  const email = username.toLowerCase() + "@tictactoe.local";
-  return client.authenticateEmail(email, password, false, username);
-}
-
-export async function loginGuest(): Promise<Session> {
-  const guestName = "Guest_" + Math.random().toString(36).substring(2, 7).toUpperCase();
-  // Use a per-tab device id so two tabs can act as two players in local testing.
-  return client.authenticateDevice(getGuestDeviceIdForTab(), true, guestName);
-}
-
 export async function createSocket(session: Session) {
   const socket = client.createSocket(USE_SSL, false);
   await socket.connect(session, true);
   return socket;
-}
-
-export async function checkUsernameAvailability(username: string): Promise<boolean> {
-  const trimmed = username.trim();
-  if (!trimmed) return false;
-
-  const protocol = USE_SSL ? "https" : "http";
-  const url = `${protocol}://${HOST}:${PORT}/v2/rpc/check_username?http_key=${encodeURIComponent(SERVER_KEY)}&unwrap=true`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username: trimmed }),
-  });
-
-  if (!res.ok) throw new Error("username check failed");
-  const raw = await res.json() as unknown;
-
-  let body: { exists?: boolean; valid?: boolean } = {};
-  if (typeof raw === "string") {
-    try {
-      const parsed = JSON.parse(raw);
-      body = (parsed && typeof parsed === "object") ? parsed as { exists?: boolean; valid?: boolean } : {};
-    } catch {
-      body = {};
-    }
-  } else if (raw && typeof raw === "object") {
-    body = raw as { exists?: boolean; valid?: boolean };
-  }
-
-  return !!body.valid && body.exists !== true;
 }
