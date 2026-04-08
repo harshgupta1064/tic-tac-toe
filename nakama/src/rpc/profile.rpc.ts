@@ -57,6 +57,17 @@ export const rpcGetDisplayName: nkruntime.RpcFunction = (ctx, logger, nk, payloa
 
 export const rpcRegisterUser: nkruntime.RpcFunction = (ctx, logger, nk, _payload) => {
   try {
+    const username = (ctx.username || "").trim();
+    if (!username) return JSON.stringify({ error: "invalid username" });
+
+    const existing = nk.sqlQuery(
+      "SELECT id FROM users WHERE lower(username) = lower($1) AND id <> $2 LIMIT 1",
+      [username, ctx.userId || ""]
+    );
+    if (existing && existing.length > 0) {
+      return JSON.stringify({ error: "username already exists" });
+    }
+
     nk.accountUpdateId(
       ctx.userId || "", ctx.username || "", null, null, null, null, null,
       { guest: false, registeredAt: Date.now() } as any
@@ -65,6 +76,25 @@ export const rpcRegisterUser: nkruntime.RpcFunction = (ctx, logger, nk, _payload
   } catch (e) {
     logger.error("rpcRegisterUser error: %s", e);
     return JSON.stringify({ error: String(e) });
+  }
+};
+
+export const rpcCheckUsername: nkruntime.RpcFunction = (_ctx, logger, nk, payload) => {
+  let params: { username?: string } = {};
+  try { params = JSON.parse(payload || "{}"); } catch {}
+
+  const username = (params.username || "").trim();
+  if (!username) return JSON.stringify({ exists: false, valid: false });
+
+  try {
+    const rows = nk.sqlQuery(
+      "SELECT id FROM users WHERE lower(username) = lower($1) LIMIT 1",
+      [username]
+    );
+    return JSON.stringify({ exists: !!(rows && rows.length > 0), valid: true });
+  } catch (e) {
+    logger.error("rpcCheckUsername error: %s", e);
+    return JSON.stringify({ exists: false, valid: true, error: "failed to check username" });
   }
 };
 

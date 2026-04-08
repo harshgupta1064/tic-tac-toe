@@ -12,6 +12,7 @@ const LS_REFRESH_TOKEN = "nk_refresh_token";
 const LS_USERNAME      = "nk_username";
 const LS_USER_ID       = "nk_user_id";
 const LS_DEVICE_ID     = "nk_device_id";
+const SS_GUEST_DEVICE_ID = "nk_guest_device_id";
 
 export function saveSession(session: Session, username: string): void {
   localStorage.setItem(LS_TOKEN, session.token);
@@ -29,6 +30,15 @@ export function getDeviceId(): string {
   if (!id) {
     id = crypto.randomUUID();
     localStorage.setItem(LS_DEVICE_ID, id);
+  }
+  return id;
+}
+
+function getGuestDeviceIdForTab(): string {
+  let id = sessionStorage.getItem(SS_GUEST_DEVICE_ID);
+  if (!id) {
+    id = crypto.randomUUID();
+    sessionStorage.setItem(SS_GUEST_DEVICE_ID, id);
   }
   return id;
 }
@@ -68,11 +78,42 @@ export async function loginAccount(username: string, password: string): Promise<
 
 export async function loginGuest(): Promise<Session> {
   const guestName = "Guest_" + Math.random().toString(36).substring(2, 7).toUpperCase();
-  return client.authenticateDevice(getDeviceId(), true, guestName);
+  // Use a per-tab device id so two tabs can act as two players in local testing.
+  return client.authenticateDevice(getGuestDeviceIdForTab(), true, guestName);
 }
 
 export async function createSocket(session: Session) {
   const socket = client.createSocket(USE_SSL, false);
   await socket.connect(session, true);
   return socket;
+}
+
+export async function checkUsernameAvailability(username: string): Promise<boolean> {
+  const trimmed = username.trim();
+  if (!trimmed) return false;
+
+  const protocol = USE_SSL ? "https" : "http";
+  const url = `${protocol}://${HOST}:${PORT}/v2/rpc/check_username?http_key=${encodeURIComponent(SERVER_KEY)}&unwrap=true`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username: trimmed }),
+  });
+
+  if (!res.ok) throw new Error("username check failed");
+  const raw = await res.json() as unknown;
+
+  let body: { exists?: boolean; valid?: boolean } = {};
+  if (typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw);
+      body = (parsed && typeof parsed === "object") ? parsed as { exists?: boolean; valid?: boolean } : {};
+    } catch {
+      body = {};
+    }
+  } else if (raw && typeof raw === "object") {
+    body = raw as { exists?: boolean; valid?: boolean };
+  }
+
+  return !!body.valid && body.exists !== true;
 }

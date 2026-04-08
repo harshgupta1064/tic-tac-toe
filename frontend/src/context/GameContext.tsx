@@ -4,7 +4,7 @@ import React, {
 import { Session, Socket, Match } from '@heroiclabs/nakama-js';
 import {
   client, createSocket,
-  registerAccount, loginAccount, loginGuest,
+  registerAccount, loginAccount, loginGuest, checkUsernameAvailability,
   saveSession, clearSession, restoreSession,
 } from '../lib/nakama';
 
@@ -60,6 +60,7 @@ interface GameContextType {
   statusMessage: string;
   errorMessage: string;
   register: (username: string, password: string) => Promise<void>;
+  checkUsername: (username: string) => Promise<boolean>;
   login: (username: string, password: string) => Promise<void>;
   continueAsGuest: () => Promise<void>;
   restoreAuth: () => Promise<void>;
@@ -313,6 +314,10 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
       setErrorMessage(getAuthErrorMessage('register', e));
     }
   }, [setupSocket]);
+
+  const checkUsername = useCallback(async (username: string) => {
+    return checkUsernameAvailability(username);
+  }, []);
 
   // ── Login ────────────────────────────────────────────────────────────────
   const login = useCallback(async (username: string, password: string) => {
@@ -588,7 +593,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
       screen, session, match, gameState, myUserId, displayName, isGuest,
       timerRemaining, activeRoomCode, activeRoomId, leaderboard, myLeaderboardRecord, rooms,
       statusMessage, errorMessage,
-      register, login, continueAsGuest, restoreAuth, logout,
+      register, checkUsername, login, continueAsGuest, restoreAuth, logout,
       findMatch, makeMove, leaveMatch,
       fetchLeaderboard, fetchRooms, createRoom, joinRoom, joinRoomByCode, deleteActiveRoom,
       requestRematch, acceptRematch, declineRematch, rematchState, rematchRequesterId,

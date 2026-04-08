@@ -527,6 +527,15 @@ var rpcGetDisplayName = (ctx, logger, nk, payload) => {
 };
 var rpcRegisterUser = (ctx, logger, nk, _payload) => {
   try {
+    const username = (ctx.username || "").trim();
+    if (!username) return JSON.stringify({ error: "invalid username" });
+    const existing = nk.sqlQuery(
+      "SELECT id FROM users WHERE lower(username) = lower($1) AND id <> $2 LIMIT 1",
+      [username, ctx.userId || ""]
+    );
+    if (existing && existing.length > 0) {
+      return JSON.stringify({ error: "username already exists" });
+    }
     nk.accountUpdateId(
       ctx.userId || "",
       ctx.username || "",
@@ -541,6 +550,25 @@ var rpcRegisterUser = (ctx, logger, nk, _payload) => {
   } catch (e) {
     logger.error("rpcRegisterUser error: %s", e);
     return JSON.stringify({ error: String(e) });
+  }
+};
+var rpcCheckUsername = (_ctx, logger, nk, payload) => {
+  let params = {};
+  try {
+    params = JSON.parse(payload || "{}");
+  } catch (e) {
+  }
+  const username = (params.username || "").trim();
+  if (!username) return JSON.stringify({ exists: false, valid: false });
+  try {
+    const rows = nk.sqlQuery(
+      "SELECT id FROM users WHERE lower(username) = lower($1) LIMIT 1",
+      [username]
+    );
+    return JSON.stringify({ exists: !!(rows && rows.length > 0), valid: true });
+  } catch (e) {
+    logger.error("rpcCheckUsername error: %s", e);
+    return JSON.stringify({ exists: false, valid: true, error: "failed to check username" });
   }
 };
 var rpcMarkGuest = (ctx, logger, nk, _payload) => {
@@ -754,6 +782,7 @@ function InitModule(ctx, logger, nk, initializer) {
   initializer.registerRpc("get_display_name", rpcGetDisplayName);
   initializer.registerRpc("register_user", rpcRegisterUser);
   initializer.registerRpc("mark_guest", rpcMarkGuest);
+  initializer.registerRpc("check_username", rpcCheckUsername);
   try {
     nk.leaderboardCreate(LEADERBOARD_WINS, false, "desc", "incr", "", {});
   } catch (e) {

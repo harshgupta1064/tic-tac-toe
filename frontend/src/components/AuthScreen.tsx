@@ -1,18 +1,114 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useGame } from '../context/GameContext';
 
 type Tab = 'login' | 'register';
 
 export default function AuthScreen() {
-  const { login, register, continueAsGuest, errorMessage } = useGame();
+  const { login, register, checkUsername, continueAsGuest, errorMessage } = useGame();
   const [tab, setTab]               = useState<Tab>('login');
   const [username, setUsername]     = useState('');
   const [password, setPassword]     = useState('');
   const [confirm, setConfirm]       = useState('');
   const [loading, setLoading]       = useState(false);
   const [localError, setLocalError] = useState('');
+  const [checkingUsername, setCheckingUsername] = useState(false);
+  const [usernameAvailable, setUsernameAvailable] = useState<boolean | null>(null);
 
   const displayError = localError || errorMessage;
+  const trimmedUsername = username.trim();
+  const usernameTooShort = trimmedUsername.length < 3;
+
+  useEffect(() => {
+    if (tab !== 'register') {
+      setUsernameAvailable(null);
+      setCheckingUsername(false);
+      return;
+    }
+
+    if (!trimmedUsername || usernameTooShort) {
+      setUsernameAvailable(null);
+      setCheckingUsername(false);
+      return;
+    }
+
+    let active = true;
+    setCheckingUsername(true);
+    setUsernameAvailable(null);
+    const timer = window.setTimeout(async () => {
+      try {
+        const available = await checkUsername(trimmedUsername);
+        if (!active) return;
+        setUsernameAvailable(available);
+      } catch {
+        if (!active) return;
+        setUsernameAvailable(null);
+      } finally {
+        if (!active) return;
+        setCheckingUsername(false);
+      }
+    }, 400);
+
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [tab, trimmedUsername, usernameTooShort, checkUsername]);
+
+  const registerDisabled =
+    loading ||
+    usernameTooShort ||
+    password.length < 6 ||
+    password !== confirm ||
+    checkingUsername ||
+    usernameAvailable === false ||
+    usernameAvailable === null;
+
+  // Username input border class
+  const getUsernameBorderClass = () => {
+    if (tab !== 'register' || !trimmedUsername || usernameTooShort) return 'border-gray-800';
+    if (checkingUsername) return 'border-gray-600';
+    if (usernameAvailable === true) return 'border-green-500';
+    if (usernameAvailable === false) return 'border-red-500';
+    return 'border-gray-800';
+  };
+
+  // Inline status icon inside the input
+  const getUsernameIcon = () => {
+    if (tab !== 'register' || !trimmedUsername || usernameTooShort) return null;
+    if (checkingUsername) return (
+      <span className="text-gray-400 text-xs select-none animate-spin inline-block">⟳</span>
+    );
+    if (usernameAvailable === true) return (
+      <span className="text-green-400 text-sm font-bold select-none">✓</span>
+    );
+    if (usernameAvailable === false) return (
+      <span className="text-red-400 text-sm font-bold select-none">✕</span>
+    );
+    return null;
+  };
+
+  // Status message below username input
+  const getUsernameStatusMsg = () => {
+    if (tab !== 'register') return null;
+    if (!trimmedUsername) return null;
+    if (usernameTooShort) return (
+      <p className="text-xs text-gray-500 mt-1 ml-1">Username must be at least 3 characters.</p>
+    );
+    if (checkingUsername) return (
+      <p className="text-xs text-gray-400 mt-1 ml-1">Checking username...</p>
+    );
+    if (usernameAvailable === true) return (
+      <p className="text-xs text-green-400 mt-1 ml-1 flex items-center gap-1">
+        <span>✓</span> <span><strong>{trimmedUsername}</strong> is available</span>
+      </p>
+    );
+    if (usernameAvailable === false) return (
+      <p className="text-xs text-red-400 mt-1 ml-1 flex items-center gap-1">
+        <span>✕</span> <span><strong>{trimmedUsername}</strong> is already taken</span>
+      </p>
+    );
+    return null;
+  };
 
   const handleSubmit = async () => {
     setLocalError('');
@@ -20,6 +116,14 @@ export default function AuthScreen() {
     if (password.length < 6) { setLocalError('Password must be at least 6 characters.'); return; }
     if (tab === 'register' && password !== confirm) {
       setLocalError('Passwords do not match.');
+      return;
+    }
+    if (tab === 'register' && usernameAvailable === false) {
+      setLocalError('That username is already taken. Please choose a different one.');
+      return;
+    }
+    if (tab === 'register' && usernameAvailable !== true) {
+      setLocalError('Please wait for username check to complete.');
       return;
     }
     setLoading(true);
@@ -39,6 +143,8 @@ export default function AuthScreen() {
     setLocalError('');
     setPassword('');
     setConfirm('');
+    setUsernameAvailable(null);
+    setCheckingUsername(false);
   };
 
   return (
@@ -68,19 +174,56 @@ export default function AuthScreen() {
         </div>
 
         <div className="space-y-2">
-          <input type="text" placeholder="Username" value={username}
-            onChange={e => setUsername(e.target.value)}
-            autoCapitalize="none" autoCorrect="off" maxLength={24}
-            className="w-full bg-gray-900 border border-gray-800 rounded-xl px-4 py-2.5 text-white placeholder-gray-600 focus:outline-none focus:border-indigo-500 text-sm" />
+          {/* Username field with inline icon */}
+          <div>
+            <div className="relative">
+              <input
+                type="text"
+                placeholder="Username"
+                value={username}
+                onChange={e => {
+                  setUsername(e.target.value);
+                  if (tab === 'register') setUsernameAvailable(null);
+                }}
+                autoCapitalize="none"
+                autoCorrect="off"
+                maxLength={24}
+                className={`w-full bg-gray-900 border rounded-xl px-4 py-2.5 text-white placeholder-gray-600 focus:outline-none text-sm transition-colors pr-9 ${getUsernameBorderClass()}`}
+              />
+              {/* Icon badge inside the input on the right */}
+              {tab === 'register' && (
+                <span className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none">
+                  {getUsernameIcon()}
+                </span>
+              )}
+            </div>
+            {/* Status message below */}
+            {getUsernameStatusMsg()}
+          </div>
+
           <input type="password" placeholder="Password" value={password}
             onChange={e => setPassword(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter' && tab === 'login') handleSubmit(); }}
             className="w-full bg-gray-900 border border-gray-800 rounded-xl px-4 py-2.5 text-white placeholder-gray-600 focus:outline-none focus:border-indigo-500 text-sm" />
           {tab === 'register' && (
-            <input type="password" placeholder="Confirm password" value={confirm}
-              onChange={e => setConfirm(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter') handleSubmit(); }}
-              className="w-full bg-gray-900 border border-gray-800 rounded-xl px-4 py-2.5 text-white placeholder-gray-600 focus:outline-none focus:border-indigo-500 text-sm" />
+            <div>
+              <input type="password" placeholder="Confirm password" value={confirm}
+                onChange={e => setConfirm(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') handleSubmit(); }}
+                className={`w-full bg-gray-900 border rounded-xl px-4 py-2.5 text-white placeholder-gray-600 focus:outline-none text-sm transition-colors ${
+                  confirm && password !== confirm ? 'border-red-500' : 'border-gray-800 focus:border-indigo-500'
+                }`} />
+              {confirm && password !== confirm && (
+                <p className="text-xs text-red-400 mt-1 ml-1 flex items-center gap-1">
+                  <span>✕</span> <span>Passwords do not match</span>
+                </p>
+              )}
+              {confirm && password === confirm && confirm.length >= 6 && (
+                <p className="text-xs text-green-400 mt-1 ml-1 flex items-center gap-1">
+                  <span>✓</span> <span>Passwords match</span>
+                </p>
+              )}
+            </div>
           )}
         </div>
 
@@ -88,8 +231,11 @@ export default function AuthScreen() {
           <p className="text-red-400 text-xs mt-2 text-center">{displayError}</p>
         )}
 
-        <button onClick={handleSubmit} disabled={loading}
-          className="w-full mt-3 bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-800 disabled:text-gray-600 text-white font-semibold py-2.5 rounded-xl transition-colors text-sm">
+        <button
+          onClick={handleSubmit}
+          disabled={tab === 'register' ? registerDisabled : loading}
+          className="w-full mt-3 bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-800 disabled:text-gray-600 text-white font-semibold py-2.5 rounded-xl transition-colors text-sm"
+        >
           {loading
             ? (tab === 'register' ? 'Creating account...' : 'Logging in...')
             : (tab === 'register' ? 'Create Account' : 'Log In')}

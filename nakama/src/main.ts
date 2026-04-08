@@ -7,7 +7,7 @@ import {
   matchLoop, matchTerminate, matchSignal, matchmakerMatched,
 } from "./match/handler";
 import { rpcGetLeaderboard } from "./rpc/leaderboard.rpc";
-import { rpcGetMyProfile, rpcGetDisplayName, rpcSetDisplayName, rpcRegisterUser, rpcMarkGuest } from "./rpc/profile.rpc";
+import { rpcGetMyProfile, rpcGetDisplayName, rpcSetDisplayName, rpcRegisterUser, rpcMarkGuest, rpcCheckUsername } from "./rpc/profile.rpc";
 import {
   rpcCreateRoom, rpcListRooms, rpcMarkRoomFull, rpcDeleteRoom, rpcGetRoomByCode,
 } from "./rpc/rooms.rpc";
@@ -41,6 +41,7 @@ function InitModule(
   initializer.registerRpc("get_display_name", rpcGetDisplayName);
   initializer.registerRpc("register_user",    rpcRegisterUser);
   initializer.registerRpc("mark_guest",       rpcMarkGuest);
+  initializer.registerRpc("check_username",   rpcCheckUsername);
 
   try { nk.leaderboardCreate(LEADERBOARD_WINS,   false, "desc" as any, "incr" as any, "", {} as any); } catch {}
   try { nk.leaderboardCreate(LEADERBOARD_LOSSES, false, "desc" as any, "incr" as any, "", {} as any); } catch {}
