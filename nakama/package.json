@@ -2,10 +2,11 @@
   "name": "tictactoe-nakama",
   "version": "1.0.0",
   "scripts": {
-    "build": "ts-patch install -q && tsc",
+    "build": "ts-patch install -q && tsc --noEmit && esbuild src/main.ts --bundle --platform=browser --format=esm --target=es2018 --outfile=build/main.js && node -e \"const fs=require('fs');const p='build/main.js';let s=fs.readFileSync(p,'utf8');s=s.replace(/initializer\\.registerMatch\\(MODULE_NAME, \\{[\\s\\S]*?\\}\\);/,`initializer.registerMatch(MODULE_NAME, {\\n    matchInit: matchInit,\\n    matchJoinAttempt: matchJoinAttempt,\\n    matchJoin: matchJoin,\\n    matchLeave: matchLeave,\\n    matchLoop: matchLoop,\\n    matchTerminate: matchTerminate,\\n    matchSignal: matchSignal\\n  });`);fs.writeFileSync(p,s);\"",
     "watch": "tsc --watch"
   },
   "devDependencies": {
+    "esbuild": "^0.28.0",
     "nakama-common": "github:heroiclabs/nakama-common",
     "nakama-runtime": "github:heroiclabs/nakama-common",
     "ts-patch": "^3.3.0",

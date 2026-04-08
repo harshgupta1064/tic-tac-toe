@@ -1,6 +1,12 @@
-import React, { createContext, useContext, useState, useRef, useCallback, useEffect } from 'react';
+import React, {
+  createContext, useContext, useState, useRef, useCallback
+} from 'react';
 import { Session, Socket, Match } from '@heroiclabs/nakama-js';
-import { client, createSocket } from '../lib/nakama';
+import {
+  client, createSocket,
+  registerAccount, loginAccount, loginGuest,
+  saveSession, clearSession, restoreSession,
+} from '../lib/nakama';
 
 export type Screen = 'auth' | 'lobby' | 'rooms' | 'matchmaking' | 'game' | 'gameover';
 export type GameMode = 'classic' | 'timed';
@@ -21,13 +27,14 @@ export interface LeaderboardEntry {
   username: string;
   wins: number;
   losses: number;
+  draws: number;
   bestStreak: number;
+  winRate: number;
   rank: number;
 }
 
 export interface Room {
   id: string;
-  code: string;
   name: string;
   mode: string;
   hostUsername: string;
@@ -39,32 +46,38 @@ export interface Room {
 interface GameContextType {
   screen: Screen;
   session: Session | null;
-  socket: Socket | null;
   match: Match | null;
   gameState: GameState;
   myUserId: string;
   displayName: string;
+  isGuest: boolean;
   timerRemaining: number;
   activeRoomCode: string;
   activeRoomId: string;
   leaderboard: LeaderboardEntry[];
+  myLeaderboardRecord: LeaderboardEntry | null;
   rooms: Room[];
   statusMessage: string;
-  rematchState: 'idle' | 'requesting' | 'incoming' | 'declined' | 'declined_timeout';
-  rematchRequesterId: string;
-  login: (username: string) => Promise<void>;
+  errorMessage: string;
+  register: (username: string, password: string) => Promise<void>;
+  login: (username: string, password: string) => Promise<void>;
+  continueAsGuest: () => Promise<void>;
+  restoreAuth: () => Promise<void>;
+  logout: () => Promise<void>;
   findMatch: (mode: GameMode) => Promise<void>;
   makeMove: (position: number) => void;
   leaveMatch: () => void;
   fetchLeaderboard: () => Promise<void>;
-  createRoom: (name: string, mode: GameMode) => Promise<void>;
   fetchRooms: () => Promise<void>;
+  createRoom: (name: string, mode: GameMode) => Promise<void>;
   joinRoom: (room: Room) => Promise<void>;
   joinRoomByCode: (code: string) => Promise<void>;
   deleteActiveRoom: () => Promise<void>;
   requestRematch: () => void;
   acceptRematch: () => void;
   declineRematch: () => void;
+  rematchState: 'idle' | 'requesting' | 'incoming' | 'declined' | 'declined_timeout';
+  rematchRequesterId: string;
   setScreen: (s: Screen) => void;
 }
 
@@ -80,16 +93,8 @@ const defaultGameState: GameState = {
 };
 
 const OpCode = {
-  MOVE: 1,
-  STATE: 2,
-  REJECTED: 3,
-  GAME_OVER: 4,
-  READY: 5,
-  TICK: 6,
-  REMATCH_REQUEST: 7,
-  REMATCH_ACCEPT: 8,
-  REMATCH_DECLINE: 9,
-  REMATCH_START: 10,
+  MOVE: 1, STATE: 2, REJECTED: 3, GAME_OVER: 4, READY: 5, TICK: 6,
+  REMATCH_REQUEST: 7, REMATCH_ACCEPT: 8, REMATCH_DECLINE: 9, REMATCH_START: 10,
   OPPONENT_LEFT_LOBBY: 11,
 };
 
@@ -101,13 +106,9 @@ function parseRpcPayload(payload: unknown, fallback: Record<string, unknown>) {
     try {
       const parsed = JSON.parse(payload);
       if (typeof parsed === 'string') {
-        try {
-          return JSON.parse(parsed);
-        } catch {
-          return fallback;
-        }
+        try { return JSON.parse(parsed); } catch { return fallback; }
       }
-      return parsed;
+      return (parsed && typeof parsed === 'object') ? parsed as Record<string, unknown> : fallback;
     } catch {
       return fallback;
     }
@@ -116,247 +117,439 @@ function parseRpcPayload(payload: unknown, fallback: Record<string, unknown>) {
   return fallback;
 }
 
+function getAuthErrorMessage(kind: 'login' | 'register' | 'guest', e: unknown): string {
+  const err = e as { message?: string; code?: number; statusCode?: number };
+  const raw = String(err?.message ?? e ?? '');
+  const msg = raw.toLowerCase();
+  const code = err?.code ?? err?.statusCode;
+
+  if (
+    msg.includes('failed to fetch') ||
+    msg.includes('networkerror') ||
+    msg.includes('load failed') ||
+    msg.includes('network request failed')
+  ) {
+    return 'Cannot reach server. Please ensure backend is running and try again.';
+  }
+
+  if (kind === 'register') {
+    if (code === 409 || msg.includes('already') || msg.includes('exists') || msg.includes('taken')) {
+      return 'Username already exists. Try a different username.';
+    }
+    if (code === 400 || msg.includes('invalid')) {
+      return 'Invalid registration details. Please check username/password format.';
+    }
+    return 'Registration failed. Please try again.';
+  }
+
+  if (kind === 'login') {
+    if (code === 401 || code === 404 || msg.includes('credentials') || msg.includes('not found') || msg.includes('password')) {
+      return 'Username or password is wrong.';
+    }
+    return 'Login failed. Please try again.';
+  }
+
+  return 'Could not start guest session. Please try again.';
+}
+
 export function GameProvider({ children }: { children: React.ReactNode }) {
-  const [screen, setScreen] = useState<Screen>('auth');
-  const [session, setSession] = useState<Session | null>(null);
-  const [socket, setSocket] = useState<Socket | null>(null);
-  const [match, setMatch] = useState<Match | null>(null);
-  const [gameState, setGameState] = useState<GameState>(defaultGameState);
-  const [myUserId, setMyUserId] = useState('');
-  const [displayName, setDisplayName] = useState('');
-  const [timerRemaining, setTimerRemaining] = useState(30);
-  const [activeRoomCode, setActiveRoomCode] = useState('');
-  const [activeRoomId, setActiveRoomId] = useState('');
-  const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
-  const [rooms, setRooms] = useState<Room[]>([]);
-  const [statusMessage, setStatusMessage] = useState('');
+  const [screen, setScreen]                     = useState<Screen>('auth');
+  const [session, setSession]                   = useState<Session | null>(null);
+  const [match, setMatch]                       = useState<Match | null>(null);
+  const [gameState, setGameState]               = useState<GameState>(defaultGameState);
+  const [myUserId, setMyUserId]                 = useState('');
+  const [displayName, setDisplayName]           = useState('');
+  const [isGuest, setIsGuest]                   = useState(false);
+  const [timerRemaining, setTimerRemaining]     = useState(30);
+  const [activeRoomCode, setActiveRoomCode]     = useState('');
+  const [activeRoomId, setActiveRoomId]         = useState('');
+  const [leaderboard, setLeaderboard]           = useState<LeaderboardEntry[]>([]);
+  const [myLeaderboardRecord, setMyLeaderboardRecord] = useState<LeaderboardEntry | null>(null);
+  const [rooms, setRooms]                       = useState<Room[]>([]);
+  const [statusMessage, setStatusMessage]       = useState('');
+  const [errorMessage, setErrorMessage]         = useState('');
   const [rematchState, setRematchState] = useState<'idle' | 'requesting' | 'incoming' | 'declined' | 'declined_timeout'>('idle');
   const [rematchRequesterId, setRematchRequesterId] = useState('');
-  const socketRef = useRef<Socket | null>(null);
-  const matchRef = useRef<Match | null>(null);
 
-  useEffect(() => {
-    matchRef.current = match;
-  }, [match]);
+  const socketRef  = useRef<Socket | null>(null);
+  const sessionRef = useRef<Session | null>(null);
 
-  const login = useCallback(async (username: string) => {
-    setStatusMessage('Connecting...');
-    try {
-      // Always generate a fresh device ID per login attempt so two tabs
-      // never accidentally share the same Nakama user identity.
-      const deviceId = crypto.randomUUID();
-      sessionStorage.setItem('deviceId', deviceId);
+  // ── Socket setup ─────────────────────────────────────────────────────────
+  const setupSocket = useCallback(async (sess: Session, guest: boolean) => {
+    if (socketRef.current) {
+      try { socketRef.current.disconnect(); } catch (_) {}
+    }
 
-      const base = username.trim().toLowerCase().replace(/[^a-z0-9_]/g, '').slice(0, 14) || 'player';
-      const suffix = Math.random().toString(36).slice(2, 8);
-      const internalUsername = `${base}_${suffix}`;
-      const sess = await client.authenticateDevice(deviceId, true, internalUsername);
-      setSession(sess);
-      setMyUserId(sess.user_id!);
-      setDisplayName(username.trim());
-      setActiveRoomCode('');
-      setActiveRoomId('');
+    const sock = await createSocket(sess);
+    socketRef.current  = sock;
+    sessionRef.current = sess;
+    setSession(sess);
+    setMyUserId(sess.user_id!);
+    setDisplayName(sess.username || '');
+    setIsGuest(guest);
+
+    sock.onmatchdata = (matchData) => {
+      const opCode = matchData.op_code;
+      let data: Record<string, unknown> = {};
       try {
-        await client.rpc(sess, 'set_display_name', JSON.stringify({ name: username.trim() }));
-      } catch {}
+        data = JSON.parse(new TextDecoder().decode(matchData.data as Uint8Array));
+      } catch (_) {}
 
-      const sock = await createSocket(sess);
-      socketRef.current = sock;
-      setSocket(sock);
+      if (opCode === OpCode.READY || opCode === OpCode.STATE) {
+        setGameState(prev => ({
+          ...prev,
+          board:       (data.board       as string[])           || prev.board,
+          marks:       (data.marks       as GameState['marks']) || prev.marks,
+          playerNames: (data.playerNames as GameState['playerNames']) || prev.playerNames,
+          currentTurn: (data.currentTurn as string)             || prev.currentTurn,
+          mode:        (data.mode        as GameMode)           || prev.mode,
+        }));
+        if (opCode === OpCode.READY) setScreen('game');
+      }
 
-      // Set up socket listeners
-      sock.onmatchdata = (matchData) => {
-        const opCode = matchData.op_code;
-        let data: any = {};
-        try {
-          data = JSON.parse(new TextDecoder().decode(matchData.data as Uint8Array));
-        } catch {}
+      if (opCode === OpCode.GAME_OVER) {
+        setGameState(prev => ({
+          ...prev,
+          board:      (data.board      as string[]) || prev.board,
+          winner:     (data.winner     as string)   || null,
+          winnerMark: (data.winnerMark as string)   || null,
+          reason:     (data.reason     as string)   || null,
+        }));
+        setScreen('gameover');
+      }
 
-        if (opCode === OpCode.READY || opCode === OpCode.STATE) {
-          let mergedMarks: { [userId: string]: 'X' | 'O' } = {};
-          setGameState(prev => {
-            const nextState = {
-              ...prev,
-              board: data.board || prev.board,
-              marks: data.marks || prev.marks,
-              playerNames: data.playerNames || prev.playerNames,
-              currentTurn: data.currentTurn || prev.currentTurn,
-              mode: data.mode || prev.mode,
-            };
-            mergedMarks = nextState.marks;
-            return nextState;
-          });
-          // Resolve opponent visible name from profile storage.
-          const ids = Object.keys(mergedMarks || {});
-          const otherId = ids.find(id => id !== (sess.user_id || ''));
-          if (otherId) {
-            client.rpc(sess, 'get_display_name', JSON.stringify({ userId: otherId }))
-              .then((res) => {
-                const body = parseRpcPayload(res.payload, { name: '' }) as { name?: string };
-                if (body.name) {
-                  setGameState((curr) => ({
-                    ...curr,
-                    playerNames: { ...curr.playerNames, [otherId]: body.name as string },
-                  }));
-                }
-              })
-              .catch(() => {});
-          }
-          if (opCode === OpCode.READY) setScreen('game');
-        }
+      if (opCode === OpCode.TICK) {
+        setTimerRemaining((data.remaining as number) ?? 30);
+      }
 
-        if (opCode === OpCode.GAME_OVER) {
-          setGameState(prev => ({
-            ...prev,
-            board: data.board || prev.board,
-            winner: data.winner || null,
-            winnerMark: data.winnerMark || null,
-            reason: data.reason || null,
-          }));
-          setScreen('gameover');
-        }
+      if (opCode === OpCode.REJECTED) {
+        setStatusMessage((data.reason as string) || 'Move rejected');
+        setTimeout(() => setStatusMessage(''), 2000);
+      }
 
-        if (opCode === OpCode.TICK) {
-          setTimerRemaining(data.remaining ?? 30);
-        }
+      if (opCode === OpCode.REMATCH_REQUEST) {
+        setRematchRequesterId((data.requestedBy as string) || '');
+        setRematchState('incoming');
+      }
 
-        // ── Rematch op-codes ──────────────────────────────────────────────
-        if (opCode === OpCode.REMATCH_REQUEST) {
-          setRematchRequesterId(data.requestedBy || '');
-          setRematchState('incoming');
-        }
-
-        if (opCode === OpCode.REMATCH_DECLINE) {
-          setRematchState(data.reason === 'timeout' ? 'declined_timeout' : 'declined');
-          setTimeout(() => {
-            setRematchState('idle');
-            setRematchRequesterId('');
-            setMatch(null);
-            setGameState(defaultGameState);
-            setScreen('lobby');
-          }, 4000);
-        }
-
-        if (opCode === OpCode.REMATCH_START) {
-          setGameState(prev => ({
-            ...prev,
-            board: data.board || ['','','','','','','','',''],
-            marks: data.marks || prev.marks,
-            playerNames: data.playerNames || prev.playerNames,
-            currentTurn: data.currentTurn || '',
-            mode: data.mode || prev.mode,
-            winner: null,
-            winnerMark: null,
-            reason: null,
-          }));
+      if (opCode === OpCode.REMATCH_DECLINE) {
+        setRematchState((data.reason as string) === 'timeout' ? 'declined_timeout' : 'declined');
+        setTimeout(() => {
           setRematchState('idle');
           setRematchRequesterId('');
-          setTimerRemaining(30);
-          setScreen('game');
-        }
-
-        if (opCode === OpCode.OPPONENT_LEFT_LOBBY) {
-          const m = matchRef.current;
-          if (socketRef.current && m?.match_id) {
-            socketRef.current.leaveMatch(m.match_id).catch(() => {});
-          }
           setMatch(null);
-          setRematchState('idle');
-          setRematchRequesterId('');
           setGameState(defaultGameState);
           setScreen('lobby');
-          const r = data.reason;
-          setStatusMessage(
-            r === 'forfeit'
-              ? 'Opponent left. You win by forfeit.'
-              : 'Opponent returned to lobby.'
-          );
-          setTimeout(() => setStatusMessage(''), 4000);
-        }
+        }, 4000);
+      }
 
-        if (opCode === OpCode.REJECTED) {
-          setStatusMessage(data.reason || 'Move rejected');
-          setTimeout(() => setStatusMessage(''), 2000);
-        }
-      };
+      if (opCode === OpCode.REMATCH_START) {
+        setGameState(prev => ({
+          ...prev,
+          board: (data.board as string[]) || ['','','','','','','','',''],
+          marks: (data.marks as GameState['marks']) || prev.marks,
+          playerNames: (data.playerNames as GameState['playerNames']) || prev.playerNames,
+          currentTurn: (data.currentTurn as string) || '',
+          mode: (data.mode as GameMode) || prev.mode,
+          winner: null,
+          winnerMark: null,
+          reason: null,
+        }));
+        setRematchState('idle');
+        setRematchRequesterId('');
+        setTimerRemaining(30);
+        setScreen('game');
+      }
 
-      sock.onmatchpresence = (presenceEvent) => {
-        if (presenceEvent.leaves && presenceEvent.leaves.length > 0) {
-          const m = matchRef.current;
-          if (m && socketRef.current) {
-            socketRef.current.leaveMatch(m.match_id).catch(() => {});
-            setMatch(null);
-            setRematchState('idle');
-            setRematchRequesterId('');
-            setGameState(defaultGameState);
-            setScreen('lobby');
-            setStatusMessage('Opponent left the match.');
-            setTimeout(() => setStatusMessage(''), 3000);
-          } else {
-            setStatusMessage('Opponent disconnected');
-          }
-        }
-      };
-
-      sock.ondisconnect = () => {
-        setStatusMessage('Disconnected from server');
+      if (opCode === OpCode.OPPONENT_LEFT_LOBBY) {
+        setMatch(null);
+        setRematchState('idle');
+        setRematchRequesterId('');
+        setGameState(defaultGameState);
         setScreen('lobby');
-      };
+      }
+    };
 
+    sock.onmatchpresence = (e) => {
+      if (e.leaves?.length) {
+        setMatch(null);
+        setRematchState('idle');
+        setRematchRequesterId('');
+        setGameState(defaultGameState);
+        setScreen('lobby');
+        setStatusMessage('Opponent disconnected');
+      }
+    };
+
+    sock.ondisconnect = () => {
+      setStatusMessage('Disconnected from server');
       setScreen('lobby');
-      setStatusMessage('');
-    } catch (e: any) {
-      setStatusMessage('Login failed: ' + (e.message || 'Unknown error'));
-    }
+    };
+
+    setScreen('lobby');
+    setErrorMessage('');
+    setStatusMessage('');
   }, []);
 
+  const restoreAuth = useCallback(async () => {
+    const restored = await restoreSession();
+    if (!restored) return;
+    try {
+      await setupSocket(restored.session, false);
+    } catch {
+      clearSession();
+    }
+  }, [setupSocket]);
+
+  // ── Register ─────────────────────────────────────────────────────────────
+  const register = useCallback(async (username: string, password: string) => {
+    setErrorMessage('');
+    try {
+      const sess = await registerAccount(username, password);
+      await client.rpc(sess, 'register_user', '');
+      saveSession(sess, username);
+      await setupSocket(sess, false);
+    } catch (e: unknown) {
+      setErrorMessage(getAuthErrorMessage('register', e));
+    }
+  }, [setupSocket]);
+
+  // ── Login ────────────────────────────────────────────────────────────────
+  const login = useCallback(async (username: string, password: string) => {
+    setErrorMessage('');
+    try {
+      const sess = await loginAccount(username, password);
+      saveSession(sess, username);
+      setDisplayName(username);
+      await setupSocket(sess, false);
+    } catch (e: unknown) {
+      setErrorMessage(getAuthErrorMessage('login', e));
+    }
+  }, [setupSocket]);
+
+  // ── Guest ────────────────────────────────────────────────────────────────
+  const continueAsGuest = useCallback(async () => {
+    setErrorMessage('');
+    try {
+      const sess = await loginGuest();
+      await client.rpc(sess, 'mark_guest', '');
+      setDisplayName(sess.username || 'Guest');
+      await setupSocket(sess, true);
+    } catch (e: unknown) {
+      setErrorMessage(getAuthErrorMessage('guest', e));
+    }
+  }, [setupSocket]);
+
+  // ── Logout ───────────────────────────────────────────────────────────────
+  const logout = useCallback(async () => {
+    clearSession();
+    try { await socketRef.current?.disconnect(true); } catch (_) {}
+    socketRef.current  = null;
+    sessionRef.current = null;
+    setSession(null);
+    setMyUserId('');
+    setDisplayName('');
+    setIsGuest(false);
+    setMatch(null);
+    setGameState(defaultGameState);
+    setActiveRoomCode('');
+    setActiveRoomId('');
+    setRematchState('idle');
+    setRematchRequesterId('');
+    setLeaderboard([]);
+    setMyLeaderboardRecord(null);
+    setScreen('auth');
+  }, []);
+
+  // ── Matchmaking ──────────────────────────────────────────────────────────
   const findMatch = useCallback(async (mode: GameMode) => {
-    if (!socketRef.current || !session) return;
+    const sock = socketRef.current;
+    if (!sock) return;
     setScreen('matchmaking');
     setStatusMessage('Looking for opponent...');
     setActiveRoomCode('');
     setActiveRoomId('');
     setGameState({ ...defaultGameState, mode });
     setTimerRemaining(30);
-
     try {
-      const sock = socketRef.current;
-
       sock.onmatchmakermatched = async (matched) => {
         try {
           const m = await sock.joinMatch(matched.match_id || '', matched.token);
           setMatch(m);
-          setStatusMessage('Opponent found! Starting game...');
-        } catch (e: any) {
-          setStatusMessage('Failed to join match: ' + e.message);
+          setStatusMessage('Opponent found! Starting...');
+        } catch (e: unknown) {
+          setStatusMessage('Failed to join match: ' +
+            String((e as { message?: string })?.message ?? e));
           setScreen('lobby');
         }
       };
-
       await sock.addMatchmaker('*', 2, 2, { mode });
-    } catch (e: any) {
-      setStatusMessage('Matchmaking failed: ' + e.message);
+    } catch (e: unknown) {
+      setStatusMessage('Matchmaking failed: ' +
+        String((e as { message?: string })?.message ?? e));
       setScreen('lobby');
     }
-  }, [session]);
+  }, []);
 
+  // ── Move ─────────────────────────────────────────────────────────────────
   const makeMove = useCallback((position: number) => {
     if (!socketRef.current || !match) return;
     const data = new TextEncoder().encode(JSON.stringify({ position }));
     socketRef.current.sendMatchState(match.match_id, OpCode.MOVE, data);
   }, [match]);
 
+  // ── Leave match ──────────────────────────────────────────────────────────
   const leaveMatch = useCallback(async () => {
     if (!socketRef.current || !match) return;
-    try {
-      await socketRef.current.leaveMatch(match.match_id);
-    } catch {}
+    try { await socketRef.current.leaveMatch(match.match_id); } catch (_) {}
     setMatch(null);
     setRematchState('idle');
     setRematchRequesterId('');
     setGameState(defaultGameState);
     setScreen('lobby');
   }, [match]);
+
+  // ── Leaderboard ──────────────────────────────────────────────────────────
+  const fetchLeaderboard = useCallback(async () => {
+    const sess = sessionRef.current;
+    if (!sess) return;
+    try {
+      const result = await client.rpc(sess, 'get_leaderboard', '');
+      const body = parseRpcPayload(result.payload, { records: [], myRecord: null }) as {
+        records?: LeaderboardEntry[];
+        myRecord?: LeaderboardEntry | null;
+      };
+      console.log('[leaderboard] records:', body.records, 'myRecord:', body.myRecord);
+      setLeaderboard(Array.isArray(body.records) ? body.records : []);
+      setMyLeaderboardRecord(body.myRecord ?? null);
+    } catch (e) {
+      console.error('[leaderboard] fetch failed:', e);
+    }
+  }, []);
+
+  // ── Rooms ────────────────────────────────────────────────────────────────
+  const fetchRooms = useCallback(async () => {
+    const sess = sessionRef.current;
+    if (!sess) return;
+    try {
+      const result = await client.rpc(sess, 'list_rooms', '');
+      const body = parseRpcPayload(result.payload, { rooms: [] }) as { rooms?: Room[] };
+      setRooms(Array.isArray(body.rooms) ? body.rooms : []);
+    } catch (e) {
+      console.error('[rooms] fetch failed:', e);
+    }
+  }, []);
+
+  const createRoom = useCallback(async (name: string, mode: GameMode) => {
+    const sess = sessionRef.current;
+    const sock = socketRef.current;
+    if (!sess || !sock) return;
+    setScreen('matchmaking');
+    setStatusMessage('Creating room...');
+    setActiveRoomCode('');
+    setActiveRoomId('');
+    setGameState({ ...defaultGameState, mode });
+    setTimerRemaining(30);
+    try {
+      const result = await client.rpc(sess, 'create_room', JSON.stringify({ name, mode, hostUsername: displayName }));
+      const body = parseRpcPayload(result.payload, {}) as { error?: string; code?: string; roomId?: string; matchId?: string };
+      if (body.error) throw new Error(body.error);
+      setActiveRoomCode(body.code || '');
+      setActiveRoomId(body.roomId || '');
+      sock.onmatchmakermatched = null;
+      setStatusMessage(`Room "${name}" ready — waiting for opponent...`);
+      const m = await sock.joinMatch(body.matchId);
+      setMatch(m);
+    } catch (e: unknown) {
+      setStatusMessage('Failed to create room: ' +
+        String((e as { message?: string })?.message ?? e));
+      setActiveRoomCode('');
+      setActiveRoomId('');
+      setScreen('lobby');
+    }
+  }, [displayName]);
+
+  const joinRoom = useCallback(async (room: Room) => {
+    const sess = sessionRef.current;
+    const sock = socketRef.current;
+    if (!sess || !sock) return;
+    setScreen('matchmaking');
+    setStatusMessage(`Joining "${room.name}"...`);
+    setActiveRoomCode('');
+    setActiveRoomId('');
+    setGameState({ ...defaultGameState, mode: room.mode as GameMode });
+    setTimerRemaining(30);
+    try {
+      sock.onmatchmakermatched = null;
+      const m = await sock.joinMatch(room.matchId);
+      setMatch(m);
+      await client.rpc(sess, 'mark_room_full', JSON.stringify({ roomId: room.id }));
+      setStatusMessage('Joined! Starting game...');
+    } catch (e: unknown) {
+      setStatusMessage('Failed to join room: ' +
+        String((e as { message?: string })?.message ?? e));
+      setScreen('lobby');
+    }
+  }, []);
+
+  const joinRoomByCode = useCallback(async (code: string) => {
+    const sess = sessionRef.current;
+    const sock = socketRef.current;
+    if (!sess || !sock) {
+      setStatusMessage('Please login again and retry.');
+      return;
+    }
+    const normalized = code.trim().toUpperCase();
+    if (!normalized) {
+      setStatusMessage('Please enter a room code.');
+      return;
+    }
+    setScreen('matchmaking');
+    setStatusMessage(`Joining room ${normalized}...`);
+    setActiveRoomCode('');
+    setActiveRoomId('');
+    try {
+      const result = await client.rpc(sess, 'get_room_by_code', JSON.stringify({ code: normalized }));
+      const body = parseRpcPayload(result.payload, {}) as { error?: string; room?: Room };
+      if (body.error) throw new Error(body.error);
+      if (!body.room) throw new Error('Room not found');
+      const room = body.room as Room;
+      sock.onmatchmakermatched = null;
+      setGameState({ ...defaultGameState, mode: room.mode as GameMode });
+      setTimerRemaining(30);
+      const m = await sock.joinMatch(room.matchId);
+      setMatch(m);
+      await client.rpc(sess, 'mark_room_full', JSON.stringify({ roomId: room.id }));
+      setStatusMessage(`Joined room ${normalized}. Starting game...`);
+    } catch (e: unknown) {
+      setStatusMessage('Failed to join by code: ' + String((e as { message?: string })?.message ?? 'Invalid room code'));
+      setScreen('rooms');
+    }
+  }, []);
+
+  const deleteActiveRoom = useCallback(async () => {
+    const sess = sessionRef.current;
+    if (!sess || !activeRoomId) {
+      setScreen('lobby');
+      return;
+    }
+    try {
+      await client.rpc(sess, 'delete_room', JSON.stringify({ roomId: activeRoomId }));
+    } catch {}
+    try {
+      if (socketRef.current && match) {
+        await socketRef.current.leaveMatch(match.match_id);
+      }
+    } catch {}
+    setMatch(null);
+    setActiveRoomCode('');
+    setActiveRoomId('');
+    setStatusMessage('');
+    setRematchState('idle');
+    setRematchRequesterId('');
+    setGameState(defaultGameState);
+    setScreen('lobby');
+  }, [activeRoomId, match]);
 
   const requestRematch = useCallback(() => {
     if (!socketRef.current || !match) return;
@@ -378,167 +571,22 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     setRematchRequesterId('');
     const data = new TextEncoder().encode(JSON.stringify({}));
     socketRef.current.sendMatchState(match.match_id, OpCode.REMATCH_DECLINE, data);
-    try {
-      await socketRef.current.leaveMatch(match.match_id);
-    } catch {}
+    try { await socketRef.current.leaveMatch(match.match_id); } catch {}
     setMatch(null);
     setGameState(defaultGameState);
     setScreen('lobby');
   }, [match]);
 
-  const fetchLeaderboard = useCallback(async () => {
-    if (!session) return;
-    try {
-      const result = await client.rpc(session, 'get_leaderboard', '');
-      const body = parseRpcPayload(result.payload, { records: [] }) as { records?: LeaderboardEntry[] };
-      setLeaderboard(body?.records || []);
-    } catch (e) {
-      console.error('Leaderboard fetch failed', e);
-    }
-  }, [session]);
-
-  const createRoom = useCallback(async (name: string, mode: GameMode) => {
-    if (!session) return;
-    setScreen('matchmaking');
-    setStatusMessage('Creating room...');
-    setActiveRoomCode('');
-    setActiveRoomId('');
-    setGameState({ ...defaultGameState, mode });
-    setTimerRemaining(30);
-
-    try {
-      const result = await client.rpc(session, 'create_room', JSON.stringify({ name, mode, hostUsername: displayName }));
-      const body = parseRpcPayload(result.payload, {}) as { error?: string; matchId?: string; code?: string; roomId?: string };
-      if (body.error) throw new Error(body.error);
-      if (!body.matchId) throw new Error('No matchId returned from create_room');
-      setActiveRoomCode(body.code || '');
-      setActiveRoomId(body.roomId || '');
-
-      const sock = socketRef.current!;
-      sock.onmatchmakermatched = null; // disable auto-matchmaker handler
-
-      setStatusMessage(`Room "${name}" created (code: ${body.code || 'N/A'}) — waiting for opponent...`);
-
-      // Join the match we just created
-      const m = await sock.joinMatch(body.matchId);
-      setMatch(m);
-
-      // Poll until READY op-code fires (handled by existing onmatchdata)
-    } catch (e: any) {
-      setStatusMessage('Failed to create room: ' + (e.message || ''));
-      setActiveRoomCode('');
-      setActiveRoomId('');
-      setScreen('lobby');
-    }
-  }, [displayName, session]);
-
-  const fetchRooms = useCallback(async () => {
-    if (!session) {
-      setStatusMessage('Not logged in. Please login again.');
-      return;
-    }
-    try {
-      const result = await client.rpc(session, 'list_rooms', '');
-      const body = parseRpcPayload(result.payload, { rooms: [] }) as { rooms?: Room[] };
-      const nextRooms = Array.isArray(body.rooms) ? body.rooms : [];
-      setRooms(nextRooms);
-      setStatusMessage(nextRooms.length > 0 ? `${nextRooms.length} room(s) found` : 'No open rooms right now.');
-    } catch (e: any) {
-      console.error('fetchRooms failed', e);
-      setStatusMessage('Failed to fetch rooms: ' + (e?.message || 'Unknown error'));
-    }
-  }, [session]);
-
-  const joinRoom = useCallback(async (room: Room) => {
-    if (!session || !socketRef.current) return;
-    setScreen('matchmaking');
-    setStatusMessage(`Joining "${room.name}"...`);
-    setActiveRoomCode('');
-    setActiveRoomId('');
-    setGameState({ ...defaultGameState, mode: room.mode as GameMode });
-    setTimerRemaining(30);
-
-    try {
-      const sock = socketRef.current;
-      sock.onmatchmakermatched = null;
-
-      const m = await sock.joinMatch(room.matchId);
-      setMatch(m);
-
-      // Mark room full so it disappears from browser
-      await client.rpc(session, 'mark_room_full', JSON.stringify({ roomId: room.id }));
-
-      setStatusMessage('Joined! Starting game...');
-    } catch (e: any) {
-      setStatusMessage('Failed to join room: ' + (e.message || ''));
-      setActiveRoomCode('');
-      setActiveRoomId('');
-      setScreen('lobby');
-    }
-  }, [session]);
-
-  const joinRoomByCode = useCallback(async (code: string) => {
-    if (!session || !socketRef.current) {
-      setStatusMessage('Please login again and retry.');
-      return;
-    }
-    const normalized = code.trim().toUpperCase();
-    if (!normalized) {
-      setStatusMessage('Please enter a room code.');
-      return;
-    }
-    setScreen('matchmaking');
-    setStatusMessage(`Joining room ${normalized}...`);
-    setActiveRoomCode('');
-    setActiveRoomId('');
-    try {
-      const result = await client.rpc(session, 'get_room_by_code', JSON.stringify({ code: normalized }));
-      const body = parseRpcPayload(result.payload, {}) as { room?: Room; error?: string };
-      if (body.error) throw new Error(body.error);
-      if (!body.room) throw new Error('Room not found');
-      const room = body.room;
-      const sock = socketRef.current;
-      sock.onmatchmakermatched = null;
-      setGameState({ ...defaultGameState, mode: room.mode as GameMode });
-      setTimerRemaining(30);
-      const m = await sock.joinMatch(room.matchId);
-      setMatch(m);
-      await client.rpc(session, 'mark_room_full', JSON.stringify({ roomId: room.id }));
-      setStatusMessage(`Joined room ${normalized}. Starting game...`);
-    } catch (e: any) {
-      setStatusMessage('Failed to join by code: ' + (e.message || 'Invalid room code'));
-      setScreen('rooms');
-    }
-  }, [session]);
-
-  const deleteActiveRoom = useCallback(async () => {
-    if (!session || !activeRoomId) {
-      setScreen('lobby');
-      return;
-    }
-    try {
-      await client.rpc(session, 'delete_room', JSON.stringify({ roomId: activeRoomId }));
-    } catch {}
-    try {
-      if (socketRef.current && match) {
-        await socketRef.current.leaveMatch(match.match_id);
-      }
-    } catch {}
-    setMatch(null);
-    setActiveRoomCode('');
-    setActiveRoomId('');
-    setStatusMessage('');
-    setGameState(defaultGameState);
-    setScreen('lobby');
-  }, [activeRoomId, match, session]);
-
   return (
     <GameContext.Provider value={{
-      screen, session, socket, match, gameState, myUserId, displayName,
-      timerRemaining, activeRoomCode, activeRoomId, leaderboard, rooms, statusMessage,
-      rematchState, rematchRequesterId,
-      login, findMatch, makeMove, leaveMatch, fetchLeaderboard, createRoom, fetchRooms, joinRoom, joinRoomByCode, deleteActiveRoom,
-      requestRematch, acceptRematch, declineRematch, setScreen,
+      screen, session, match, gameState, myUserId, displayName, isGuest,
+      timerRemaining, activeRoomCode, activeRoomId, leaderboard, myLeaderboardRecord, rooms,
+      statusMessage, errorMessage,
+      register, login, continueAsGuest, restoreAuth, logout,
+      findMatch, makeMove, leaveMatch,
+      fetchLeaderboard, fetchRooms, createRoom, joinRoom, joinRoomByCode, deleteActiveRoom,
+      requestRematch, acceptRematch, declineRematch, rematchState, rematchRequesterId,
+      setScreen,
     }}>
       {children}
     </GameContext.Provider>
