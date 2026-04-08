@@ -26,10 +26,9 @@ This project is built for developers who want to learn practical multiplayer gam
 - Win/loss/draw detection with full leaderboard tracking
 - Persistent leaderboard: wins, losses, draws, current streak, best streak, rank
 - Personal rank shown even if player is outside top 10
-- Registered account system (username + password, persisted in PostgreSQL)
-- Guest mode (play without registering, stats not saved)
-- JWT access token + refresh token authentication
-- Auto session restore on page reload (3-tier: token -> refresh -> re-auth)
+- Frictionless device-based authentication (username only, tied to device ID)
+- Persistent stats across sessions via device linking
+- Auto session restore on page reload using JWT access and refresh tokens
 - Mobile-first responsive UI with dark theme
 
 ## Tech stack table

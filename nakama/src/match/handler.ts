@@ -35,7 +35,6 @@ function matchInit(ctx: nkruntime.Context, logger: nkruntime.Logger, nk: nkrunti
     rematchRequestedBy: "",
     rematchRequestTick: 0,
     isRematch: false,
-    guestUserIds: [],
   };
   logger.info("Match initialized, mode: %s", mode);
   return { state, tickRate, label: JSON.stringify({ mode }) };
@@ -56,14 +55,7 @@ function matchJoin(
     const presence = presences[i];
     state.presences[presence.userId] = presence;
     state.playerNames[presence.userId] = presence.username || "Player";
-    try {
-      const users = nk.usersGetId([presence.userId]);
-      if (users && users.length > 0) {
-        const metadataValue = users[0].metadata as any;
-        const meta = typeof metadataValue === "string" ? JSON.parse(metadataValue || "{}") : (metadataValue || {});
-        if (meta.guest === true) state.guestUserIds.push(presence.userId);
-      }
-    } catch {}
+
     logger.info("Player joined: %s", presence.userId);
   }
 

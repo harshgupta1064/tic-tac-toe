@@ -58,10 +58,10 @@ Manual rooms are explicit and named, unlike automatic random pairing:
 
 ## State management on the server vs client
 
-Server holds canonical `MatchState` (board, marks, turn, winner, timer, guests). Client keeps a mirror copy in React state. After each valid state transition, the server broadcasts the new state and the client replaces local snapshot from server payload instead of mutating game logic client-side. This prevents frontend drift and keeps both players synchronized with one authority.
+Server holds canonical `MatchState` (board, marks, turn, winner, timer). Client keeps a mirror copy in React state. After each valid state transition, the server broadcasts the new state and the client replaces local snapshot from server payload instead of mutating game logic client-side. This prevents frontend drift and keeps both players synchronized with one authority.
 
 ## Token lifecycle
 
 - **Access token:** short-lived JWT (default 2 hours), sent on requests and socket auth.
 - **Refresh token:** longer-lived token used to mint new access token when access expires.
-- **Page load restore chain:** frontend first checks if access token is still valid; if expired it tries refresh; if refresh fails it re-authenticates using stored credentials; if credentials are missing (guest or fresh browser), auth screen is shown.
+- **Page load restore chain:** frontend first checks if access token is still valid; if expired it tries refresh; if refresh fails or tokens are missing, the user is prompted to enter their name to generate a new device-based session.

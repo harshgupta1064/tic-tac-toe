@@ -11,7 +11,7 @@ The leaderboard system tracks six player metrics for registered users:
 5. Best win streak ever
 6. Overall rank
 
-Guest users are excluded from all leaderboard and streak writes. Draw outcomes are streak-neutral (no increment, no reset).
+Draw outcomes are streak-neutral (no increment, no reset).
 
 ## Why four separate leaderboards?
 
@@ -73,11 +73,4 @@ Writes happen immediately at result decision points:
 
 Runtime writes are synchronous in Nakama's module execution model, so updates are persisted before final state broadcast completes. This makes leaderboard fetches immediately after match completion consistent with latest outcomes.
 
-## Guest exclusion
 
-Two enforcement layers:
-
-- **Layer 1 (authoritative server):** write functions check `guestUserIds` before any leaderboard/storage write.
-- **Layer 2 (frontend UX):** leaderboard button is hidden for `isGuest === true`.
-
-Even if client behavior is altered, server checks prevent guest records from being created.

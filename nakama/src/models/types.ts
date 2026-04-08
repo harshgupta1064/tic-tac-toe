@@ -65,7 +65,6 @@ export interface MatchState {
   rematchRequestedBy:  string;
   rematchRequestTick:  number;
   isRematch:           boolean;
-  guestUserIds:        string[];
 }
 
 export interface RoomRecord {

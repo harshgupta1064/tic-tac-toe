@@ -21,7 +21,6 @@ var COLLECTION_ROOMS = "rooms";
 var USER_PROFILE_KEY = "profile";
 var MODULE_NAME = "tictactoe";
 var SYSTEM_USER_ID = "00000000-0000-0000-0000-000000000000";
-var PLAYER_PROFILE_COLLECTION = "player_profile";
 var WIN_LINES = [
   [0, 1, 2],
   [3, 4, 5],
@@ -203,8 +202,7 @@ function matchInit(ctx, logger, nk, params) {
     emptySinceTick: -1,
     rematchRequestedBy: "",
     rematchRequestTick: 0,
-    isRematch: false,
-    guestUserIds: []
+    isRematch: false
   };
   logger.info("Match initialized, mode: %s", mode);
   return { state, tickRate, label: JSON.stringify({ mode }) };
@@ -219,15 +217,6 @@ function matchJoin(ctx, logger, nk, dispatcher, tick, state, presences) {
     const presence = presences[i];
     state.presences[presence.userId] = presence;
     state.playerNames[presence.userId] = presence.username || "Player";
-    try {
-      const users = nk.usersGetId([presence.userId]);
-      if (users && users.length > 0) {
-        const metadataValue = users[0].metadata;
-        const meta = typeof metadataValue === "string" ? JSON.parse(metadataValue || "{}") : metadataValue || {};
-        if (meta.guest === true) state.guestUserIds.push(presence.userId);
-      }
-    } catch (e) {
-    }
     logger.info("Player joined: %s", presence.userId);
   }
   if (Object.keys(state.presences).length === 2) {
@@ -469,127 +458,6 @@ var rpcGetLeaderboard = (ctx, logger, nk, _payload) => {
   return JSON.stringify({ records: rows });
 };
 
-// src/rpc/profile.rpc.ts
-var rpcGetMyProfile = (ctx, logger, nk, _payload) => {
-  try {
-    const profile = readProfile(nk, ctx.userId || "", ctx.username || "");
-    return JSON.stringify({ profile });
-  } catch (e) {
-    logger.error("rpcGetMyProfile error: %s", e);
-    return JSON.stringify({ error: "Failed to fetch profile" });
-  }
-};
-var rpcSetDisplayName = (ctx, logger, nk, payload) => {
-  let params = {};
-  try {
-    params = JSON.parse(payload || "{}");
-  } catch (e) {
-  }
-  const name = (params.name || "").trim().substring(0, 20);
-  if (!ctx.userId || !name) return JSON.stringify({ error: "invalid name" });
-  try {
-    nk.storageWrite([{
-      collection: PLAYER_PROFILE_COLLECTION,
-      key: "display_name",
-      userId: ctx.userId,
-      value: { name },
-      permissionRead: 2,
-      permissionWrite: 1
-    }]);
-    return JSON.stringify({ ok: true });
-  } catch (e) {
-    logger.error("rpcSetDisplayName error: %s", e);
-    return JSON.stringify({ error: "failed to save display name" });
-  }
-};
-var rpcGetDisplayName = (ctx, logger, nk, payload) => {
-  let params = {};
-  try {
-    params = JSON.parse(payload || "{}");
-  } catch (e) {
-  }
-  const userId = (params.userId || "").trim();
-  if (!userId) return JSON.stringify({ name: "" });
-  try {
-    const records = nk.storageRead([{
-      collection: PLAYER_PROFILE_COLLECTION,
-      key: "display_name",
-      userId
-    }]);
-    if (!records || records.length === 0) return JSON.stringify({ name: "" });
-    const raw = records[0].value;
-    const value = typeof raw === "string" ? JSON.parse(raw) : raw;
-    return JSON.stringify({ name: value && value.name ? value.name : "" });
-  } catch (e) {
-    logger.error("rpcGetDisplayName error: %s", e);
-    return JSON.stringify({ name: "" });
-  }
-};
-var rpcRegisterUser = (ctx, logger, nk, _payload) => {
-  try {
-    const username = (ctx.username || "").trim();
-    if (!username) return JSON.stringify({ error: "invalid username" });
-    const existing = nk.sqlQuery(
-      "SELECT id FROM users WHERE lower(username) = lower($1) AND id <> $2 LIMIT 1",
-      [username, ctx.userId || ""]
-    );
-    if (existing && existing.length > 0) {
-      return JSON.stringify({ error: "username already exists" });
-    }
-    nk.accountUpdateId(
-      ctx.userId || "",
-      ctx.username || "",
-      null,
-      null,
-      null,
-      null,
-      null,
-      { guest: false, registeredAt: Date.now() }
-    );
-    return JSON.stringify({ success: true });
-  } catch (e) {
-    logger.error("rpcRegisterUser error: %s", e);
-    return JSON.stringify({ error: String(e) });
-  }
-};
-var rpcCheckUsername = (_ctx, logger, nk, payload) => {
-  let params = {};
-  try {
-    params = JSON.parse(payload || "{}");
-  } catch (e) {
-  }
-  const username = (params.username || "").trim();
-  if (!username) return JSON.stringify({ exists: false, valid: false });
-  try {
-    const rows = nk.sqlQuery(
-      "SELECT id FROM users WHERE lower(username) = lower($1) LIMIT 1",
-      [username]
-    );
-    return JSON.stringify({ exists: !!(rows && rows.length > 0), valid: true });
-  } catch (e) {
-    logger.error("rpcCheckUsername error: %s", e);
-    return JSON.stringify({ exists: false, valid: true, error: "failed to check username" });
-  }
-};
-var rpcMarkGuest = (ctx, logger, nk, _payload) => {
-  try {
-    nk.accountUpdateId(
-      ctx.userId || "",
-      ctx.username || "",
-      null,
-      null,
-      null,
-      null,
-      null,
-      { guest: true }
-    );
-    return JSON.stringify({ success: true });
-  } catch (e) {
-    logger.error("rpcMarkGuest error: %s", e);
-    return JSON.stringify({ error: String(e) });
-  }
-};
-
 // src/rpc/rooms.rpc.ts
 function parsePayloadObject(payload) {
   try {
@@ -772,17 +640,11 @@ function InitModule(ctx, logger, nk, initializer) {
   });
   initializer.registerMatchmakerMatched(matchmakerMatched);
   initializer.registerRpc("get_leaderboard", rpcGetLeaderboard);
-  initializer.registerRpc("get_my_profile", rpcGetMyProfile);
   initializer.registerRpc("create_room", rpcCreateRoom);
   initializer.registerRpc("list_rooms", rpcListRooms);
   initializer.registerRpc("mark_room_full", rpcMarkRoomFull);
   initializer.registerRpc("delete_room", rpcDeleteRoom);
   initializer.registerRpc("get_room_by_code", rpcGetRoomByCode);
-  initializer.registerRpc("set_display_name", rpcSetDisplayName);
-  initializer.registerRpc("get_display_name", rpcGetDisplayName);
-  initializer.registerRpc("register_user", rpcRegisterUser);
-  initializer.registerRpc("mark_guest", rpcMarkGuest);
-  initializer.registerRpc("check_username", rpcCheckUsername);
   try {
     nk.leaderboardCreate(LEADERBOARD_WINS, false, "desc", "incr", "", {});
   } catch (e) {
