@@ -12,6 +12,10 @@ var OpCode = {
     GAME_OVER: 4, // server → client: game ended (win/draw/forfeit)
     READY: 5, // server → client: both players joined, game starting
     TICK: 6, // server → client: timer tick (remaining seconds)
+    REMATCH_REQUEST: 7, // server → client: opponent wants a rematch
+    REMATCH_ACCEPT: 8, // client → server: player accepts rematch
+    REMATCH_DECLINE: 9, // client ↔ server: rematch declined
+    REMATCH_START: 10, // server → client: rematch accepted, reset game
 };
 // ─── Win Detection ────────────────────────────────────────────────────────────
 var WIN_LINES = [
@@ -48,6 +52,9 @@ var matchInit = function (ctx, logger, nk, params) {
         turnLimitTicks: 30, // 30 seconds
         roomId: typeof params['roomId'] === 'string' ? params['roomId'] : '',
         emptySinceTick: -1,
+        rematchRequestedBy: '',
+        rematchRequestTick: 0,
+        isRematch: false,
     };
     logger.info('Match initialized, mode: %s', mode);
     return { state: state, tickRate: tickRate, label: JSON.stringify({ mode: mode }) };
@@ -159,77 +166,152 @@ var matchLoop = function (ctx, logger, nk, dispatcher, tick, state, messages) {
     // If less than 2 players, wait.
     if (presenceCount < 2)
         return { state: state };
-    if (state.gameOver)
-        return null; // terminate match
     var _loop_1 = function (message) {
-        if (message.opCode !== OpCode.MOVE)
-            return "continue";
         var senderId = message.sender.userId;
-        // Validate: is it this player's turn?
-        if (senderId !== state.currentTurn) {
-            dispatcher.broadcastMessage(OpCode.REJECTED, JSON.stringify({ reason: 'Not your turn' }), [message.sender]);
-            return "continue";
-        }
-        var move = void 0;
-        try {
-            move = JSON.parse(nk.binaryToString(message.data));
-        }
-        catch (e) {
-            dispatcher.broadcastMessage(OpCode.REJECTED, JSON.stringify({ reason: 'Invalid message format' }), [message.sender]);
-            return "continue";
-        }
-        var pos = move.position;
-        // Validate: position in range and cell empty
-        if (pos < 0 || pos > 8 || state.board[pos] !== '') {
-            dispatcher.broadcastMessage(OpCode.REJECTED, JSON.stringify({ reason: 'Invalid move position' }), [message.sender]);
-            return "continue";
-        }
-        // Apply move
-        state.board[pos] = state.marks[senderId];
-        // Check win/draw
-        var result = checkWinner(state.board);
-        if (result) {
-            state.gameOver = true;
-            if (result === 'draw') {
-                state.winner = 'draw';
-                dispatcher.broadcastMessage(OpCode.GAME_OVER, JSON.stringify({
-                    board: state.board,
-                    winner: 'draw',
-                    reason: 'draw',
-                }));
-                writeLeaderboardDraw(nk, logger, state);
+        if (message.opCode === OpCode.MOVE) {
+            if (state.gameOver)
+                return "continue";
+            // Validate: is it this player's turn?
+            if (senderId !== state.currentTurn) {
+                dispatcher.broadcastMessage(OpCode.REJECTED, JSON.stringify({ reason: 'Not your turn' }), [message.sender]);
+                return "continue";
+            }
+            var move = void 0;
+            try {
+                move = JSON.parse(nk.binaryToString(message.data));
+            }
+            catch (e) {
+                dispatcher.broadcastMessage(OpCode.REJECTED, JSON.stringify({ reason: 'Invalid message format' }), [message.sender]);
+                return "continue";
+            }
+            var pos = move.position;
+            // Validate: position in range and cell empty
+            if (pos < 0 || pos > 8 || state.board[pos] !== '') {
+                dispatcher.broadcastMessage(OpCode.REJECTED, JSON.stringify({ reason: 'Invalid move position' }), [message.sender]);
+                return "continue";
+            }
+            // Apply move
+            state.board[pos] = state.marks[senderId];
+            // Check win/draw
+            var result_1 = checkWinner(state.board);
+            if (result_1) {
+                state.gameOver = true;
+                state.rematchRequestedBy = '';
+                state.rematchRequestTick = 0;
+                if (result_1 === 'draw') {
+                    state.winner = 'draw';
+                    dispatcher.broadcastMessage(OpCode.GAME_OVER, JSON.stringify({
+                        board: state.board,
+                        winner: 'draw',
+                        reason: 'draw',
+                    }));
+                    writeLeaderboardDraw(nk, logger, state);
+                }
+                else {
+                    // result is 'X' or 'O' — find whose userId it is
+                    var winnerUserId = Object.keys(state.marks).find(function (uid) { return state.marks[uid] === result_1; });
+                    var loserUserId = Object.keys(state.marks).find(function (uid) { return state.marks[uid] !== result_1; });
+                    state.winner = winnerUserId;
+                    dispatcher.broadcastMessage(OpCode.GAME_OVER, JSON.stringify({
+                        board: state.board,
+                        winner: winnerUserId,
+                        winnerMark: result_1,
+                        reason: 'win',
+                    }));
+                    writeLeaderboard(nk, logger, state, winnerUserId, loserUserId);
+                }
             }
             else {
-                // result is 'X' or 'O' — find whose userId it is
-                var winnerUserId = Object.keys(state.marks).find(function (uid) { return state.marks[uid] === result; });
-                var loserUserId = Object.keys(state.marks).find(function (uid) { return state.marks[uid] !== result; });
-                state.winner = winnerUserId;
-                dispatcher.broadcastMessage(OpCode.GAME_OVER, JSON.stringify({
+                // Switch turns
+                var userIds = Object.keys(state.marks);
+                state.currentTurn = userIds.find(function (uid) { return uid !== senderId; });
+                state.turnStartTick = tick;
+                dispatcher.broadcastMessage(OpCode.STATE, JSON.stringify({
                     board: state.board,
-                    winner: winnerUserId,
-                    winnerMark: result,
-                    reason: 'win',
+                    playerNames: state.playerNames,
+                    currentTurn: state.currentTurn,
+                    lastMove: { position: pos, mark: state.marks[senderId] },
                 }));
-                writeLeaderboard(nk, logger, state, winnerUserId, loserUserId);
             }
         }
-        else {
-            // Switch turns
+        // ── Rematch request ───────────────────────────────────────────────────
+        if (message.opCode === OpCode.REMATCH_REQUEST) {
+            // Only valid after game is over
+            if (!state.gameOver)
+                return "continue";
+            // Prevent duplicate requests
+            if (state.rematchRequestedBy)
+                return "continue";
+            state.rematchRequestedBy = senderId;
+            state.rematchRequestTick = tick;
+            // Notify the OTHER player
+            var otherUserId = Object.keys(state.presences).find(function (uid) { return uid !== senderId; });
+            var otherPresence = otherUserId ? state.presences[otherUserId] : undefined;
+            if (otherPresence) {
+                dispatcher.broadcastMessage(OpCode.REMATCH_REQUEST, JSON.stringify({ requestedBy: senderId }), [otherPresence]);
+            }
+        }
+        // ── Rematch accept ────────────────────────────────────────────────────
+        if (message.opCode === OpCode.REMATCH_ACCEPT) {
+            // Must be the OTHER player accepting (not the requester)
+            if (!state.rematchRequestedBy)
+                return "continue";
+            if (senderId === state.rematchRequestedBy)
+                return "continue";
+            if (!state.gameOver)
+                return "continue";
+            // Reset game state for a new round
+            state.board = ['', '', '', '', '', '', '', '', ''];
+            state.winner = null;
+            state.gameOver = false;
+            state.isRematch = true;
+            state.rematchRequestedBy = '';
+            state.rematchRequestTick = 0;
+            // Previous X becomes O and vice versa
             var userIds = Object.keys(state.marks);
-            state.currentTurn = userIds.find(function (uid) { return uid !== senderId; });
+            var prevX = userIds.find(function (uid) { return state.marks[uid] === 'X'; });
+            var prevO = userIds.find(function (uid) { return state.marks[uid] === 'O'; });
+            state.marks[prevX] = 'O';
+            state.marks[prevO] = 'X';
+            // The new X (previously O) goes first
+            state.currentTurn = prevO;
             state.turnStartTick = tick;
-            dispatcher.broadcastMessage(OpCode.STATE, JSON.stringify({
+            dispatcher.broadcastMessage(OpCode.REMATCH_START, JSON.stringify({
                 board: state.board,
+                marks: state.marks,
                 playerNames: state.playerNames,
                 currentTurn: state.currentTurn,
-                lastMove: { position: pos, mark: state.marks[senderId] },
+                mode: state.mode,
             }));
+        }
+        // ── Rematch decline ───────────────────────────────────────────────────
+        if (message.opCode === OpCode.REMATCH_DECLINE) {
+            if (!state.rematchRequestedBy)
+                return "continue";
+            if (!state.gameOver)
+                return "continue";
+            // Notify the requester that it was declined
+            var requesterPresence = state.presences[state.rematchRequestedBy];
+            if (requesterPresence) {
+                dispatcher.broadcastMessage(OpCode.REMATCH_DECLINE, JSON.stringify({ reason: 'declined' }), [requesterPresence]);
+            }
+            state.rematchRequestedBy = '';
+            state.rematchRequestTick = 0;
         }
     };
     // ── Process incoming move messages ──────────────────────────────────────────
     for (var _i = 0, messages_1 = messages; _i < messages_1.length; _i++) {
         var message = messages_1[_i];
         _loop_1(message);
+    }
+    // ── Rematch request timeout (30s) ──────────────────────────────────────
+    if (state.gameOver &&
+        state.rematchRequestedBy &&
+        (tick - state.rematchRequestTick) >= 30) {
+        // Notify both players that rematch timed out.
+        dispatcher.broadcastMessage(OpCode.REMATCH_DECLINE, JSON.stringify({ reason: 'timeout' }));
+        state.rematchRequestedBy = '';
+        state.rematchRequestTick = 0;
     }
     // ── Timer check (timed mode only) ───────────────────────────────────────────
     if (state.mode === 'timed' && !state.gameOver) {

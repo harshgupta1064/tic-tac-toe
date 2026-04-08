@@ -50,6 +50,8 @@ interface GameContextType {
   leaderboard: LeaderboardEntry[];
   rooms: Room[];
   statusMessage: string;
+  rematchState: 'idle' | 'requesting' | 'incoming' | 'declined' | 'declined_timeout';
+  rematchRequesterId: string;
   login: (username: string) => Promise<void>;
   findMatch: (mode: GameMode) => Promise<void>;
   makeMove: (position: number) => void;
@@ -60,6 +62,9 @@ interface GameContextType {
   joinRoom: (room: Room) => Promise<void>;
   joinRoomByCode: (code: string) => Promise<void>;
   deleteActiveRoom: () => Promise<void>;
+  requestRematch: () => void;
+  acceptRematch: () => void;
+  declineRematch: () => void;
   setScreen: (s: Screen) => void;
 }
 
@@ -74,7 +79,18 @@ const defaultGameState: GameState = {
   mode: 'classic',
 };
 
-const OpCode = { MOVE: 1, STATE: 2, REJECTED: 3, GAME_OVER: 4, READY: 5, TICK: 6 };
+const OpCode = {
+  MOVE: 1,
+  STATE: 2,
+  REJECTED: 3,
+  GAME_OVER: 4,
+  READY: 5,
+  TICK: 6,
+  REMATCH_REQUEST: 7,
+  REMATCH_ACCEPT: 8,
+  REMATCH_DECLINE: 9,
+  REMATCH_START: 10,
+};
 
 const GameContext = createContext<GameContextType | null>(null);
 
@@ -113,6 +129,8 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [statusMessage, setStatusMessage] = useState('');
+  const [rematchState, setRematchState] = useState<'idle' | 'requesting' | 'incoming' | 'declined' | 'declined_timeout'>('idle');
+  const [rematchRequesterId, setRematchRequesterId] = useState('');
   const socketRef = useRef<Socket | null>(null);
 
   const login = useCallback(async (username: string) => {
@@ -196,6 +214,41 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
           setTimerRemaining(data.remaining ?? 30);
         }
 
+        // ── Rematch op-codes ──────────────────────────────────────────────
+        if (opCode === OpCode.REMATCH_REQUEST) {
+          setRematchRequesterId(data.requestedBy || '');
+          setRematchState('incoming');
+        }
+
+        if (opCode === OpCode.REMATCH_DECLINE) {
+          setRematchState(data.reason === 'timeout' ? 'declined_timeout' : 'declined');
+          setTimeout(() => {
+            setRematchState('idle');
+            setRematchRequesterId('');
+            setMatch(null);
+            setGameState(defaultGameState);
+            setScreen('lobby');
+          }, 4000);
+        }
+
+        if (opCode === OpCode.REMATCH_START) {
+          setGameState(prev => ({
+            ...prev,
+            board: data.board || ['','','','','','','','',''],
+            marks: data.marks || prev.marks,
+            playerNames: data.playerNames || prev.playerNames,
+            currentTurn: data.currentTurn || '',
+            mode: data.mode || prev.mode,
+            winner: null,
+            winnerMark: null,
+            reason: null,
+          }));
+          setRematchState('idle');
+          setRematchRequesterId('');
+          setTimerRemaining(30);
+          setScreen('game');
+        }
+
         if (opCode === OpCode.REJECTED) {
           setStatusMessage(data.reason || 'Move rejected');
           setTimeout(() => setStatusMessage(''), 2000);
@@ -261,6 +314,34 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     try {
       await socketRef.current.leaveMatch(match.match_id);
     } catch {}
+    setMatch(null);
+    setRematchState('idle');
+    setRematchRequesterId('');
+    setGameState(defaultGameState);
+    setScreen('lobby');
+  }, [match]);
+
+  const requestRematch = useCallback(() => {
+    if (!socketRef.current || !match) return;
+    setRematchState('requesting');
+    const data = new TextEncoder().encode(JSON.stringify({}));
+    socketRef.current.sendMatchState(match.match_id, OpCode.REMATCH_REQUEST, data);
+  }, [match]);
+
+  const acceptRematch = useCallback(() => {
+    if (!socketRef.current || !match) return;
+    setRematchState('idle');
+    const data = new TextEncoder().encode(JSON.stringify({}));
+    socketRef.current.sendMatchState(match.match_id, OpCode.REMATCH_ACCEPT, data);
+  }, [match]);
+
+  const declineRematch = useCallback(() => {
+    if (!socketRef.current || !match) return;
+    setRematchState('idle');
+    setRematchRequesterId('');
+    const data = new TextEncoder().encode(JSON.stringify({}));
+    socketRef.current.sendMatchState(match.match_id, OpCode.REMATCH_DECLINE, data);
+    // Go back to lobby immediately on decline
     setMatch(null);
     setGameState(defaultGameState);
     setScreen('lobby');
@@ -416,7 +497,9 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     <GameContext.Provider value={{
       screen, session, socket, match, gameState, myUserId, displayName,
       timerRemaining, activeRoomCode, activeRoomId, leaderboard, rooms, statusMessage,
-      login, findMatch, makeMove, leaveMatch, fetchLeaderboard, createRoom, fetchRooms, joinRoom, joinRoomByCode, deleteActiveRoom, setScreen,
+      rematchState, rematchRequesterId,
+      login, findMatch, makeMove, leaveMatch, fetchLeaderboard, createRoom, fetchRooms, joinRoom, joinRoomByCode, deleteActiveRoom,
+      requestRematch, acceptRematch, declineRematch, setScreen,
     }}>
       {children}
     </GameContext.Provider>

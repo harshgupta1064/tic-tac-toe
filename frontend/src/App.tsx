@@ -3,6 +3,7 @@ import AuthScreen from './components/AuthScreen';
 import LobbyScreen from './components/LobbyScreen';
 import MatchmakingScreen from './components/MatchmakingScreen';
 import GameBoard from './components/GameBoard';
+import GameOverScreen from './components/GameOverScreen';
 import RoomBrowserScreen from './components/RoomBrowserScreen';
 
 function Router() {
@@ -14,7 +15,7 @@ function Router() {
     case 'rooms': return <RoomBrowserScreen />;
     case 'matchmaking': return <MatchmakingScreen />;
     case 'game': return <GameBoard />;
-    case 'gameover': return <GameBoard />;
+    case 'gameover': return <GameOverScreen />;
     default: return <AuthScreen />;
   }
 }
