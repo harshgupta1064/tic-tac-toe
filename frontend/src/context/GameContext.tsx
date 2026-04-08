@@ -343,7 +343,13 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
   // ── Logout ───────────────────────────────────────────────────────────────
   const logout = useCallback(async () => {
     clearSession();
-    try { await socketRef.current?.disconnect(true); } catch (_) {}
+    if (socketRef.current) {
+      // Avoid redirect race: ondisconnect currently sends users to lobby.
+      socketRef.current.ondisconnect = null;
+      socketRef.current.onmatchpresence = null;
+      socketRef.current.onmatchdata = null;
+      try { await socketRef.current.disconnect(true); } catch (_) {}
+    }
     socketRef.current  = null;
     sessionRef.current = null;
     setSession(null);

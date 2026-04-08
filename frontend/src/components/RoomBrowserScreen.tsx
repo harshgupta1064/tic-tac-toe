@@ -25,6 +25,12 @@ export default function RoomBrowserScreen() {
 
   return (
     <div className="flex flex-col items-center justify-center min-h-screen px-6">
+      <button
+        onClick={() => setScreen('lobby')}
+        className="fixed top-4 left-4 z-40 bg-gray-900/90 border border-gray-700 text-gray-300 hover:text-white hover:border-gray-500 text-xs px-3 py-2 rounded-lg transition-colors"
+      >
+        ← Back
+      </button>
       <div className="w-full max-w-sm">
         <div className="flex items-center justify-between mb-6">
           <h2 className="text-xl font-bold text-white">Game Rooms</h2>
@@ -34,12 +40,6 @@ export default function RoomBrowserScreen() {
               className="text-indigo-400 hover:text-indigo-300 text-sm transition-colors"
             >
               Clear
-            </button>
-            <button
-              onClick={() => setScreen('lobby')}
-              className="text-gray-500 hover:text-gray-300 text-sm transition-colors"
-            >
-              ← Back
             </button>
           </div>
         </div>

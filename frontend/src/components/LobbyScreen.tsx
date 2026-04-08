@@ -20,6 +20,12 @@ export default function LobbyScreen() {
 
   return (
     <div className="flex flex-col items-center justify-center min-h-screen px-6">
+      <button
+        onClick={logout}
+        className="fixed top-4 left-4 z-40 bg-gray-900/90 border border-gray-700 text-gray-300 hover:text-white hover:border-gray-500 text-xs px-3 py-2 rounded-lg transition-colors"
+      >
+        Log out
+      </button>
       <div className="w-full max-w-sm">
 
         {/* Header */}
@@ -37,12 +43,7 @@ export default function LobbyScreen() {
               {isGuest ? 'Playing as guest — wins not saved' : 'Ranked player'}
             </p>
           </div>
-          <button
-            onClick={logout}
-            className="text-gray-600 hover:text-gray-400 text-xs transition-colors"
-          >
-            Log out
-          </button>
+          <div />
         </div>
 
         {/* Mode selector */}

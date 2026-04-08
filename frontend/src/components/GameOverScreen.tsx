@@ -131,6 +131,12 @@ export default function GameOverScreen() {
 
       {/* Main game over screen */}
       <div className="flex flex-col items-center justify-center min-h-screen px-6">
+        <button
+          onClick={leaveMatch}
+          className="fixed top-4 left-4 z-40 bg-gray-900/90 border border-gray-700 text-gray-300 hover:text-white hover:border-gray-500 text-xs px-3 py-2 rounded-lg transition-colors"
+        >
+          ← Back
+        </button>
         <div className="w-full max-w-sm">
 
           {/* Result */}

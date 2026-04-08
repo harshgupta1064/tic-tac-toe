@@ -14,6 +14,18 @@ export default function MatchmakingScreen() {
 
   return (
     <div className="flex flex-col items-center justify-center min-h-screen px-6">
+      <button
+        onClick={() => {
+          if (activeRoomCode) {
+            deleteActiveRoom();
+          } else {
+            setScreen('lobby');
+          }
+        }}
+        className="fixed top-4 left-4 z-40 bg-gray-900/90 border border-gray-700 text-gray-300 hover:text-white hover:border-gray-500 text-xs px-3 py-2 rounded-lg transition-colors"
+      >
+        {activeRoomCode ? 'Delete Room' : '← Back'}
+      </button>
       <div className="text-center">
         <div className="relative mb-8">
           <div className="w-20 h-20 rounded-full border-4 border-gray-700 border-t-indigo-500 animate-spin mx-auto" />
@@ -29,18 +41,6 @@ export default function MatchmakingScreen() {
             <p className="text-xs text-gray-500 mt-2">Share this code with your friend to join.</p>
           </div>
         )}
-        <button
-          onClick={() => {
-            if (activeRoomCode) {
-              deleteActiveRoom();
-            } else {
-              setScreen('lobby');
-            }
-          }}
-          className="mt-10 text-gray-500 hover:text-gray-300 text-sm transition-colors"
-        >
-          {activeRoomCode ? 'Delete Room' : 'Cancel'}
-        </button>
       </div>
     </div>
   );
