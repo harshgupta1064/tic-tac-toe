@@ -198,7 +198,7 @@ function matchInit(ctx, logger, nk, params) {
     mode,
     turnStartTick: 0,
     tickRate,
-    turnLimitTicks: 30,
+    turnLimitTicks: 10,
     roomId: typeof params["roomId"] === "string" ? params["roomId"] : "",
     emptySinceTick: -1,
     rematchRequestedBy: "",
@@ -415,6 +415,7 @@ function matchLoop(ctx, logger, nk, dispatcher, tick, state, messages) {
     state.rematchRequestTick = 0;
   }
   if (state.mode === "timed" && !state.gameOver) {
+    if (state.turnLimitTicks !== 10) state.turnLimitTicks = 10;
     const elapsed = tick - state.turnStartTick;
     const remaining = state.turnLimitTicks - elapsed;
     if (remaining >= 0) {

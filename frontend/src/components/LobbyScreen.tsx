@@ -58,7 +58,7 @@ export default function LobbyScreen() {
             className={`flex-1 py-2.5 rounded-lg text-sm font-medium transition-colors ${
               mode === 'timed' ? 'bg-orange-600 text-white' : 'text-gray-400 hover:text-white'
             }`}
-          >⏱ Timed (30s)</button>
+          >⏱ Timed (10s)</button>
         </div>
 
         <button

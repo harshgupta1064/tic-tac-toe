@@ -160,7 +160,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
   const [myUserId, setMyUserId]                 = useState('');
   const [displayName, setDisplayName]           = useState('');
   const [isGuest, setIsGuest]                   = useState(false);
-  const [timerRemaining, setTimerRemaining]     = useState(30);
+  const [timerRemaining, setTimerRemaining]     = useState(10);
   const [activeRoomCode, setActiveRoomCode]     = useState('');
   const [activeRoomId, setActiveRoomId]         = useState('');
   const [leaderboard, setLeaderboard]           = useState<LeaderboardEntry[]>([]);
@@ -219,7 +219,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
       }
 
       if (opCode === OpCode.TICK) {
-        setTimerRemaining((data.remaining as number) ?? 30);
+        setTimerRemaining((data.remaining as number) ?? 10);
       }
 
       if (opCode === OpCode.REJECTED) {
@@ -257,7 +257,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
         }));
         setRematchState('idle');
         setRematchRequesterId('');
-        setTimerRemaining(30);
+        setTimerRemaining(10);
         setScreen('game');
       }
 
@@ -370,7 +370,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     setActiveRoomCode('');
     setActiveRoomId('');
     setGameState({ ...defaultGameState, mode });
-    setTimerRemaining(30);
+    setTimerRemaining(10);
     try {
       sock.onmatchmakermatched = async (matched) => {
         try {
@@ -449,7 +449,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     setActiveRoomCode('');
     setActiveRoomId('');
     setGameState({ ...defaultGameState, mode });
-    setTimerRemaining(30);
+    setTimerRemaining(10);
     try {
       const result = await client.rpc(sess, 'create_room', JSON.stringify({ name, mode, hostUsername: displayName }));
       const body = parseRpcPayload(result.payload, {}) as { error?: string; code?: string; roomId?: string; matchId?: string };
@@ -478,7 +478,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     setActiveRoomCode('');
     setActiveRoomId('');
     setGameState({ ...defaultGameState, mode: room.mode as GameMode });
-    setTimerRemaining(30);
+    setTimerRemaining(10);
     try {
       sock.onmatchmakermatched = null;
       const m = await sock.joinMatch(room.matchId);
@@ -516,7 +516,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
       const room = body.room as Room;
       sock.onmatchmakermatched = null;
       setGameState({ ...defaultGameState, mode: room.mode as GameMode });
-      setTimerRemaining(30);
+      setTimerRemaining(10);
       const m = await sock.joinMatch(room.matchId);
       setMatch(m);
       await client.rpc(sess, 'mark_room_full', JSON.stringify({ roomId: room.id }));

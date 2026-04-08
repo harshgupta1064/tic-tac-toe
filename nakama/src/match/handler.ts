@@ -29,7 +29,7 @@ function matchInit(ctx: nkruntime.Context, logger: nkruntime.Logger, nk: nkrunti
     mode,
     turnStartTick: 0,
     tickRate,
-    turnLimitTicks: 30,
+    turnLimitTicks: 10,
     roomId: typeof params["roomId"] === "string" ? params["roomId"] : "",
     emptySinceTick: -1,
     rematchRequestedBy: "",
@@ -257,6 +257,8 @@ function matchLoop(
   }
 
   if (state.mode === "timed" && !state.gameOver) {
+    // Enforce timed mode limit even for matches created before config changes.
+    if (state.turnLimitTicks !== 10) state.turnLimitTicks = 10;
     const elapsed = tick - state.turnStartTick;
     const remaining = state.turnLimitTicks - elapsed;
     if (remaining >= 0) {
