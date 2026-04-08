@@ -4,16 +4,16 @@ import { useGame } from '../context/GameContext';
 export default function GameOverScreen() {
   const { fetchLeaderboard } = useGame();
   const {
-    gameState, myUserId, leaveMatch,
+    gameState, myUserId, leaveMatch, sessionStats,
     rematchState, requestRematch, acceptRematch, declineRematch,
   } = useGame();
 
   useEffect(() => {
-    // Silently refresh leaderboard in background after each game.
+    // Silently refresh global leaderboard in background after each game.
     fetchLeaderboard();
   }, [fetchLeaderboard]);
 
-  const { winner, winnerMark, reason, board, marks, mode } = gameState;
+  const { winner, winnerMark, reason, board, marks, mode, playerNames } = gameState;
 
   const iWon   = winner === myUserId;
   const isDraw = winner === 'draw';
@@ -154,17 +154,54 @@ export default function GameOverScreen() {
             )}
           </div>
 
-          {/* Final board (mini, decorative) */}
-          <div className="grid grid-cols-3 gap-2 mb-8 opacity-50">
-            {board.map((cell, i) => (
-              <div
-                key={i}
-                className="aspect-square flex items-center justify-center bg-gray-800 rounded-xl text-2xl font-bold"
-              >
-                {cell === 'X' && <span className="text-indigo-400">✕</span>}
-                {cell === 'O' && <span className="text-rose-400">○</span>}
-              </div>
-            ))}
+          {/* Session Stats Leaderboard */}
+          <div className="bg-gray-900 border border-gray-700/50 rounded-2xl p-5 mb-8 text-left relative overflow-hidden">
+            <div className="absolute top-0 right-0 p-4 opacity-5 pointer-events-none">
+              <span className="text-8xl">🏆</span>
+            </div>
+            
+            <div className="flex items-center justify-center gap-2 mb-4 text-emerald-400">
+              <span className="text-xl">🏆</span>
+              <span className="font-semibold text-lg">Session Score</span>
+            </div>
+
+            <div className="text-sm font-medium text-gray-500 mb-2 mt-4 flex px-2 border-b border-gray-800 pb-2">
+              <span className="flex-1">Player</span>
+              <span className="w-20 text-center">W/L/D</span>
+              <span className="w-16 text-right">Score</span>
+            </div>
+
+            <div className="space-y-3">
+              {Object.keys(marks)
+                .sort((a, b) => {
+                   const sA = sessionStats[a]?.score || 0;
+                   const sB = sessionStats[b]?.score || 0;
+                   return sB - sA;
+                })
+                .map((uid, idx) => {
+                const s = sessionStats[uid] || { wins: 0, losses: 0, draws: 0, score: 0 };
+                const isMe = uid === myUserId;
+                const name = playerNames[uid] || 'Player';
+                return (
+                  <div key={uid} className={`flex items-center px-2 py-1 ${isMe ? 'text-white font-medium' : 'text-gray-300'}`}>
+                    <div className="flex-1 truncate pr-2">
+                      <span className="text-gray-500 mr-2">{idx + 1}.</span>
+                      {name} {isMe && <span className="text-gray-500 font-normal text-sm ml-1">(you)</span>}
+                    </div>
+                    <div className="w-20 text-center tabular-nums text-sm">
+                      <span className="text-emerald-400">{s.wins}</span>
+                      <span className="text-gray-600">/</span>
+                      <span className="text-rose-400">{s.losses}</span>
+                      <span className="text-gray-600">/</span>
+                      <span className="text-gray-400">{s.draws}</span>
+                    </div>
+                    <div className="w-16 text-right tabular-nums text-sm font-mono tracking-tight text-white">
+                      {s.score}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
 
           {/* Action buttons */}

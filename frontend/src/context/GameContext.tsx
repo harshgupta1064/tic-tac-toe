@@ -32,6 +32,14 @@ export interface LeaderboardEntry {
   rank: number;
 }
 
+export interface PlayerSessionStats {
+  wins: number;
+  losses: number;
+  draws: number;
+  score: number;
+}
+export type SessionStats = Record<string, PlayerSessionStats>;
+
 export interface Room {
   id: string;
   name: string;
@@ -74,6 +82,7 @@ interface GameContextType {
   declineRematch: () => void;
   rematchState: 'idle' | 'requesting' | 'incoming' | 'declined' | 'declined_timeout';
   rematchRequesterId: string;
+  sessionStats: SessionStats;
   setScreen: (s: Screen) => void;
 }
 
@@ -130,9 +139,15 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
   const [errorMessage, setErrorMessage]         = useState('');
   const [rematchState, setRematchState] = useState<'idle' | 'requesting' | 'incoming' | 'declined' | 'declined_timeout'>('idle');
   const [rematchRequesterId, setRematchRequesterId] = useState('');
+  const [sessionStats, setSessionStats] = useState<SessionStats>({});
 
   const socketRef  = useRef<Socket | null>(null);
   const sessionRef = useRef<Session | null>(null);
+  const gameStateRef = useRef(gameState);
+
+  React.useEffect(() => {
+    gameStateRef.current = gameState;
+  }, [gameState]);
 
   // ── Socket setup ───────────────────────────────────────────────────────────
   const setupSocket = useCallback(async (sess: Session) => {
@@ -174,6 +189,29 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
           winnerMark: (data.winnerMark as string)   || null,
           reason:     (data.reason     as string)   || null,
         }));
+        
+        const winnerId = data.winner as string;
+        const isDraw = winnerId === 'draw';
+        const uids = Object.keys(gameStateRef.current.marks);
+        setSessionStats(prev => {
+          const next = { ...prev };
+          for (const uid of uids) {
+            if (!next[uid]) next[uid] = { wins: 0, losses: 0, draws: 0, score: 0 };
+            const curr = { ...next[uid] };
+            if (isDraw) {
+              curr.draws += 1;
+              curr.score += 100;
+            } else if (uid === winnerId) {
+              curr.wins += 1;
+              curr.score += 200;
+            } else {
+              curr.losses += 1;
+            }
+            next[uid] = curr;
+          }
+          return next;
+        });
+        
         setScreen('gameover');
       }
 
@@ -225,6 +263,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
         setRematchState('idle');
         setRematchRequesterId('');
         setGameState(defaultGameState);
+        setSessionStats({});
         setScreen('lobby');
       }
     };
@@ -235,6 +274,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
         setRematchState('idle');
         setRematchRequesterId('');
         setGameState(defaultGameState);
+        setSessionStats({});
         setScreen('lobby');
         setStatusMessage('Opponent disconnected');
       }
@@ -301,6 +341,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     setRematchRequesterId('');
     setLeaderboard([]);
     setMyLeaderboardRecord(null);
+    setSessionStats({});
     setScreen('auth');
   }, []);
 
@@ -314,6 +355,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     setActiveRoomId('');
     setGameState({ ...defaultGameState, mode });
     setTimerRemaining(10);
+    setSessionStats({});
     try {
       sock.onmatchmakermatched = async (matched) => {
         try {
@@ -349,6 +391,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     setRematchState('idle');
     setRematchRequesterId('');
     setGameState(defaultGameState);
+    setSessionStats({});
     setScreen('lobby');
   }, [match]);
 
@@ -392,6 +435,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     setActiveRoomId('');
     setGameState({ ...defaultGameState, mode });
     setTimerRemaining(10);
+    setSessionStats({});
     try {
       const result = await client.rpc(sess, 'create_room', JSON.stringify({ name, mode, hostUsername: displayName }));
       const body = parseRpcPayload(result.payload, {}) as { error?: string; code?: string; roomId?: string; matchId?: string };
@@ -421,6 +465,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     setActiveRoomId('');
     setGameState({ ...defaultGameState, mode: room.mode as GameMode });
     setTimerRemaining(10);
+    setSessionStats({});
     try {
       sock.onmatchmakermatched = null;
       const m = await sock.joinMatch(room.matchId);
@@ -459,6 +504,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
       sock.onmatchmakermatched = null;
       setGameState({ ...defaultGameState, mode: room.mode as GameMode });
       setTimerRemaining(10);
+      setSessionStats({});
       const m = await sock.joinMatch(room.matchId);
       setMatch(m);
       await client.rpc(sess, 'mark_room_full', JSON.stringify({ roomId: room.id }));
@@ -490,6 +536,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     setRematchState('idle');
     setRematchRequesterId('');
     setGameState(defaultGameState);
+    setSessionStats({});
     setScreen('lobby');
   }, [activeRoomId, match]);
 
@@ -516,6 +563,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     try { await socketRef.current.leaveMatch(match.match_id); } catch {}
     setMatch(null);
     setGameState(defaultGameState);
+    setSessionStats({});
     setScreen('lobby');
   }, [match]);
 
@@ -528,7 +576,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
       findMatch, makeMove, leaveMatch,
       fetchLeaderboard, fetchRooms, createRoom, joinRoom, joinRoomByCode, deleteActiveRoom,
       requestRematch, acceptRematch, declineRematch, rematchState, rematchRequesterId,
-      setScreen,
+      sessionStats, setScreen,
     }}>
       {children}
     </GameContext.Provider>
