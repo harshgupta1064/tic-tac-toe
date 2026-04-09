@@ -2,6 +2,13 @@
 
 This README documents the backend in a standard, production-like way for assignment submission.
 
+## Live Links
+
+- Frontend Live Demo:
+  - `https://tic-tac-toe-git-main-harshgupta1064-7247s-projects.vercel.app/`
+- Backend Health Endpoint:
+  - `tic-tac-toe-production-97e5.up.railway.app`
+
 ## 1) Setup and Installation Instructions
 
 ### Prerequisites
@@ -107,30 +114,49 @@ docker compose down -v
 - `nakama/src/match/handler.ts`: turn logic, win/draw, timer timeout, rematch, disconnect behavior.
 - `nakama/src/rpc/rooms.rpc.ts`: room create/list/join-by-code related server APIs.
 
-<!-- ## 3) Deployment Process Documentation
+## 3) Deployment Process Documentation
 
-### Common backend deployment
+### Deployed stack (current)
 
-Recommended approach: VM + PostgreSQL + Nakama process manager.
+- **Frontend**: Vercel (`frontend` project root)
+- **Backend**: Railway (Nakama Docker service)
+- **Database**: Railway PostgreSQL
 
-1. Provision Linux VM (or Windows Server) and PostgreSQL.
-2. Clone repo and run `cd nakama && npm ci && npm run build`.
-3. Install Nakama binary on server.
-4. Run migration:
-   - `nakama migrate up --database.address "postgres:<PASS>@<HOST>:<PORT>/<DB>"`
-5. Start Nakama with:
-   - `--database.address`
-   - `--runtime.path` (to `nakama/build`)
-   - `--runtime.js_entrypoint "main.js"`
-   - `--session.token_expiry_sec`
-   - `--logger.level`
-6. Put reverse proxy/TLS in front (HTTPS + WSS via port 443).
+### Backend deployment (Railway)
 
-### Frontend deployment
+1. Create a Railway project.
+2. Add a PostgreSQL service and copy DB credentials/connection info.
+3. Add a new service from this GitHub repository, with root directory `nakama`.
+4. Railway builds using `nakama/Dockerfile`.
+5. Set backend environment variables in Railway:
+   - `NAKAMA_NAME=tictactoe`
+   - `NAKAMA_LOGGER_LEVEL=INFO`
+   - `NAKAMA_SESSION_TOKEN_EXPIRY_SEC=7200`
+   - `NAKAMA_RUNTIME_PATH=/nakama/data/modules/build`
+   - `NAKAMA_DB_ADDRESS=postgres:<PASSWORD>@<HOST>:<PORT>/<DATABASE>`
+6. Ensure Railway public routing targets Nakama HTTP port `7350`.
+7. Deploy and verify:
+   - `https://<your-railway-backend-domain>/healthcheck` returns `{}`
 
-- Deploy `frontend` to Vercel.
-- Set `VITE_NAKAMA_HOST` to your backend domain.
-- Set `VITE_NAKAMA_PORT=443` and `VITE_NAKAMA_USE_SSL=true`. -->
+### Frontend deployment (Vercel)
+
+1. Import this repository into Vercel.
+2. Set project root directory to `frontend`.
+3. Build command:
+   - `npm run build`
+4. Output directory:
+   - `dist`
+5. Set frontend environment variables:
+   - `VITE_NAKAMA_HOST=<your-railway-backend-domain>`
+   - `VITE_NAKAMA_PORT=443`
+   - `VITE_NAKAMA_USE_SSL=true`
+6. Deploy and open the generated Vercel production URL.
+
+### Deployment notes
+
+- Frontend uses HTTPS/WSS to connect to Railway backend through port `443`.
+- Railway routes public traffic to Nakama internal port `7350`.
+- If deployment logs show permission issues for `.bin/tsc` or `.bin/vite`, this repo already uses Node-invoked scripts in `frontend/package.json`.
 
 ## 4) API / Server Configuration Details
 
