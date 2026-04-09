@@ -59,6 +59,33 @@ npm run dev
 
 Open `http://localhost:3000`.
 
+### Docker setup (backend + database)
+
+From repo root:
+
+```bash
+# 1) Create env file for compose
+cp .env.docker.example .env
+
+# 2) Start PostgreSQL + Nakama
+docker compose up --build -d
+
+# 3) Check logs (optional)
+docker compose logs -f nakama
+```
+
+Stop services:
+
+```bash
+docker compose down
+```
+
+Reset DB volume too:
+
+```bash
+docker compose down -v
+```
+
 ## 2) Architecture and Design Decisions
 
 ### Architecture

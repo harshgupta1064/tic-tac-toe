@@ -1,0 +1,38 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: tictactoe-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-nakama}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-nakama}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  nakama:
+    build:
+      context: ./nakama
+      dockerfile: Dockerfile
+    container_name: tictactoe-nakama
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NAKAMA_NAME: ${NAKAMA_NAME:-tictactoe}
+      NAKAMA_DB_ADDRESS: postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-nakama}
+      NAKAMA_RUNTIME_PATH: /nakama/data/modules/build
+      NAKAMA_LOGGER_LEVEL: ${NAKAMA_LOGGER_LEVEL:-INFO}
+      NAKAMA_SESSION_TOKEN_EXPIRY_SEC: ${NAKAMA_SESSION_TOKEN_EXPIRY_SEC:-7200}
+    ports:
+      - "7350:7350"
+      - "7349:7349"
+
+volumes:
+  postgres_data:
