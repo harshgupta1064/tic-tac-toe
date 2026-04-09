@@ -1,6 +1,6 @@
-# Multiplayer Tic-Tac-Toe Backend
+# Multiplayer Tic-Tac-Toe
 
-This README documents the backend in a standard, production-like way for assignment submission.
+This README documents the Multiplayer Tic-Tac-Toe game
 
 ## Live Links
 
