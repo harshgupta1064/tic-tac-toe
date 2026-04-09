@@ -22,35 +22,9 @@ Relevant fields:
 
 Registered users are created via `authenticateEmail`, while guests use `authenticateDevice`. Guest device IDs are random and intentionally not persisted locally, so guest sessions are effectively disposable.
 
-### 2. Leaderboards (leaderboard_record table)
-
-Leaderboards are Nakama-managed score tables.
-
-| Leaderboard ID | Operator | Sort | What it tracks |
-|---|---|---|---|
-| `tictactoe_wins` | `incr` | `desc` | Total wins per player |
-| `tictactoe_losses` | `incr` | `desc` | Total losses per player |
-| `tictactoe_draws` | `incr` | `desc` | Total draws per player |
-| `tictactoe_best_streak` | `best` | `desc` | Highest win streak ever achieved |
-
-Operator behavior:
-
-- `incr`: each write adds to existing score.
-- `best`: write only takes effect if new value is greater than current value.
-
-Rank is computed automatically from sorted scores.
-
-### 3. Storage Objects (storage table)
+### 2. Storage Objects (storage table)
 
 Nakama storage is key-value JSON with `(collection, key, userId)` namespacing.
-
-**Collection: `player_stats`**
-
-- Key pattern: `stats_{userId}`
-- Value: `{ currentStreak: number }`
-- Permissions: `read=2` (public read), `write=1` (owner write)
-
-Why storage for `currentStreak`: the leaderboard `best` operator cannot decrease values, but current streak must reset to zero on loss. So live streak is mutable storage, while all-time best remains in leaderboard.
 
 **Collection: `rooms`**
 

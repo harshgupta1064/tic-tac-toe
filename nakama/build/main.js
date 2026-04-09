@@ -50,7 +50,7 @@ function matchInit(ctx, logger, nk, params) {
     mode,
     turnStartTick: 0,
     tickRate,
-    turnLimitTicks: 10,
+    turnLimitTicks: 30,
     roomId: typeof params["roomId"] === "string" ? params["roomId"] : "",
     emptySinceTick: -1,
     rematchRequestedBy: "",

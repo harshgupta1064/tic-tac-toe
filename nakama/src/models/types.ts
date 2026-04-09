@@ -16,13 +16,9 @@ export const OpCode = {
 
 
 // ─── Storage collections ──────────────────────────────────────────────────────
-export const COLLECTION_USERS   = "users";
 export const COLLECTION_ROOMS   = "rooms";
-export const COLLECTION_STATS   = "player_stats";
-export const USER_PROFILE_KEY   = "profile";
 export const MODULE_NAME        = "tictactoe";
 export const SYSTEM_USER_ID     = "00000000-0000-0000-0000-000000000000";
-export const PLAYER_PROFILE_COLLECTION = "player_profile";
 
 // ─── Win lines ────────────────────────────────────────────────────────────────
 export const WIN_LINES = [

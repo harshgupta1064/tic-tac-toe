@@ -118,7 +118,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
   const [gameState, setGameState]               = useState<GameState>(defaultGameState);
   const [myUserId, setMyUserId]                 = useState('');
   const [displayName, setDisplayName]           = useState('');
-  const [timerRemaining, setTimerRemaining]     = useState(10);
+  const [timerRemaining, setTimerRemaining]     = useState(30);
   const [activeRoomCode, setActiveRoomCode]     = useState('');
   const [activeRoomId, setActiveRoomId]         = useState('');
   const [rooms, setRooms]                       = useState<Room[]>([]);
@@ -339,7 +339,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     setActiveRoomId('');
     setSessionStats({});
     setGameState({ ...defaultGameState, mode });
-    setTimerRemaining(10);
+    setTimerRemaining(30);
     try {
       sock.onmatchmakermatched = async (matched) => {
         try {
@@ -403,7 +403,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     setActiveRoomCode('');
     setActiveRoomId('');
     setGameState({ ...defaultGameState, mode });
-    setTimerRemaining(10);
+    setTimerRemaining(30);
     setSessionStats({});
     try {
       const result = await client.rpc(sess, 'create_room', { name, mode, hostUsername: displayName });
@@ -433,7 +433,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     setActiveRoomCode('');
     setActiveRoomId('');
     setGameState({ ...defaultGameState, mode: room.mode as GameMode });
-    setTimerRemaining(10);
+    setTimerRemaining(30);
     setSessionStats({});
     try {
       sock.onmatchmakermatched = () => {};
@@ -472,7 +472,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
       const room = body.room as Room;
       sock.onmatchmakermatched = () => {};
       setGameState({ ...defaultGameState, mode: room.mode as GameMode });
-      setTimerRemaining(10);
+      setTimerRemaining(30);
       setSessionStats({});
       const m = await sock.joinMatch(room.matchId);
       setMatch(m);
