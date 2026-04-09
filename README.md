@@ -1,4 +1,4 @@
-# Multiplayer Tic-Tac-Toe Backend (Assignment README)
+# Multiplayer Tic-Tac-Toe Backend
 
 This README documents the backend in a standard, production-like way for assignment submission.
 
