@@ -5,9 +5,9 @@ This README documents the backend in a standard, production-like way for assignm
 ## Live Links
 
 - Frontend Live Demo:
-  - `https://tic-tac-toe-git-main-harshgupta1064-7247s-projects.vercel.app/`
+  - [https://tic-tac-toe-git-main-harshgupta1064-7247s-projects.vercel.app/](https://tic-tac-toe-git-main-harshgupta1064-7247s-projects.vercel.app/)
 - Backend Health Endpoint:
-  - `tic-tac-toe-production-97e5.up.railway.app`
+  - [https://tic-tac-toe-production-97e5.up.railway.app/healthcheck](https://tic-tac-toe-production-97e5.up.railway.app/healthcheck)
 
 ## 1) Setup and Installation Instructions
 
